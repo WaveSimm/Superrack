@@ -1,7 +1,7 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
-#include "Util.h"
+#include <farbot/RealtimeObject.hpp>
 #include <atomic>
 #include <map>
 #include <memory>
@@ -19,28 +19,37 @@ struct PluginScanCache
 };
 
 //==============================================================================
-/** 한 입력 채널에 적용되는 VST3 직렬 체인 (Phase 1).
+/** 한 입력 채널에 적용되는 VST3 직렬 체인 (Phase 1 · D2 재설계).
 
     - 채널을 스테레오(2ch) 내부 버퍼로 처리: 모노 입력을 L/R 로 복제 → 체인 처리
       → 좌채널을 모노 출력(ASIO Out[ch])으로 보냄. (대부분의 모노/스테레오 FX 호환)
     - 플러그인 추가/제거/순서변경은 **메시지 스레드**에서만.
-    - 오디오 콜백은 lock-free: reconfiguring 플래그가 켜진 동안엔 dry 패스스루.
-      (메시지 스레드가 플래그를 켠 뒤 CallbackFence 로 in-flight 콜백 종료를
-      확인하고 체인을 수정 — 설계 R1)
-*/
+
+    체인 동기화 (D2, farbot::RealtimeObject nonRealtimeMutatable):
+    - 메시지 스레드가 원본(editList)을 수정한 뒤 publishChain() 으로 복사 스왑.
+      스왑은 RT 가 체인을 놓을 때까지 정확히 대기(스핀)하고, 구버전 벡터는
+      메시지 스레드에서 해제된다.
+    - 오디오/워커 스레드의 획득은 **wait-free** (ScopedAccess<realtime>).
+      이전 설계(reconfiguring 플래그 + 대기 가드)와 달리 편집 중에도
+      dry 패스스루 갭이 생기지 않는다 — 항상 유효한 체인을 본다.
+    - Node 는 shared_ptr — 교체된 노드의 파괴는 항상 메시지 스레드에서 일어난다.
+
+    스레드 규약: process() 는 블록당 한 스레드(오디오 또는 워커 1개)만 호출.
+    서로 다른 스트립은 병렬 처리 가능(내부 버퍼가 스트립별로 독립). */
 class ChannelStrip
 {
 public:
     ChannelStrip (juce::AudioPluginFormatManager& formatManager, PluginScanCache& scanCache);
     ~ChannelStrip();
 
-    /** 장치 시작 시 호출(메시지 스레드). 내부 버퍼/플러그인 prepare. */
+    /** 장치 시작 시 호출(메시지 스레드, 콜백 시작 전). 내부 버퍼/플러그인 prepare. */
     void prepare (double sampleRate, int maxBlockSize);
     void releaseResources();
 
     //==========================================================================
-    // ── 오디오 스레드 ──────────────────────────────────────────────────────
-    /** 모노 in → 체인 → (출력 게인) → 모노 out. numSamples <= maxBlockSize. 무할당/무락. */
+    // ── 오디오/워커 스레드 ────────────────────────────────────────────────
+    /** 모노 in → 체인 → (출력 게인) → 모노 out. 무할당·wait-free 획득.
+        협상 초과 블록(R2)·미준비 상태는 dry 패스스루. */
     void process (const float* in, float* out, int numSamples) noexcept;
 
     /** 출력 게인 (dB). 오디오 스레드에 atomic 반영. GUI/세션에서 호출. */
@@ -68,7 +77,7 @@ public:
     // ── 세션 직렬화 (메시지 스레드) ─────────────────────────────────────────
     /** 이 채널 상태를 var(DynamicObject)로: { outGainDb, plugins:[{path,bypass,state}] }. */
     juce::var getStateVar();
-    /** var 의 plugins 배열 + 게인으로 체인을 통째로 교체(한 번의 reconfigure). */
+    /** var 의 plugins 배열 + 게인으로 체인을 통째로 교체(한 번의 스왑). */
     void loadChain (const juce::var& pluginsArray, float gainDb, juce::StringArray& errors);
 
 private:
@@ -79,16 +88,24 @@ private:
         juce::String filePath;        // 세션 복원용 .vst3 경로
     };
 
+    /** shared_ptr 벡터 = 복사 가능(farbot 요구) + 노드 파괴는 마지막 참조 소유
+        스레드에서 — publishChain 구조상 항상 메시지 스레드. */
+    using NodeList = std::vector<std::shared_ptr<Node>>;
+    using RtChain  = farbot::RealtimeObject<NodeList, farbot::RealtimeObjectOptions::nonRealtimeMutatable>;
+
     /** path+state 로 노드 1개 생성(prepare·setState 포함). 실패 시 nullptr. */
-    std::unique_ptr<Node> makeNode (const juce::String& path, bool bypass,
+    std::shared_ptr<Node> makeNode (const juce::String& path, bool bypass,
                                     const juce::String& base64State, juce::String& err);
+    void prepareNode (Node& node);
+
+    /** editList 를 RT 뷰로 복사 스왑(메시지 스레드). 구버전은 여기서 해제. */
+    void publishChain() { chain.nonRealtimeReplace (editList); }
 
     juce::AudioPluginFormatManager& formats;
     PluginScanCache&                scanCache;         // 전 스트립 공유 (메시지 스레드 전용)
 
-    std::vector<std::unique_ptr<Node>> nodes;          // 메시지 스레드 소유, 오디오 스레드 읽기
-    std::atomic<bool> reconfiguring { false };
-    sr::CallbackFence fence;                           // R1: 콜백 세대 기반 재구성 가드
+    NodeList editList;   // 메시지 스레드 소유 원본 — GUI 조회·세션 직렬화 대상
+    RtChain  chain;      // 오디오/워커 스레드용 RT 뷰
 
     std::atomic<float> outGainLin { 1.0f };            // 오디오 스레드용 선형 게인
     std::atomic<float> outGainDb  { 0.0f };            // GUI/세션 readback
@@ -99,12 +116,6 @@ private:
 
     juce::AudioBuffer<float> stereoBuffer;             // 2 x maxBlock (사전 할당)
     juce::MidiBuffer         midiScratch;              // 빈 MIDI 재사용
-
-    /** reconfiguring 가드로 체인을 안전하게 수정. */
-    template <typename Fn>
-    void reconfigure (Fn&& fn);
-
-    void prepareNode (Node& node);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ChannelStrip)
 };

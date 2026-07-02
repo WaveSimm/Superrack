@@ -1,85 +1,14 @@
 {
   "version": "1.0",
-  "enabled": true,
+  "enabled": false,
   "teamName": "",
   "feature": "asio-vst3-host",
   "pdcaPhase": "Do",
   "orchestrationPattern": "leader",
   "ctoAgent": "opus",
-  "startedAt": "2026-07-02T13:16:20.419Z",
-  "lastUpdated": "2026-07-02T13:23:15.172Z",
-  "teammates": [
-    {
-      "name": "a3e58f0a2b9d48e26",
-      "role": "general-purpose",
-      "model": "sonnet",
-      "status": "completed",
-      "currentTask": null,
-      "taskId": null,
-      "startedAt": "2026-07-02T13:16:20.421Z",
-      "lastActivityAt": "2026-07-02T13:23:15.166Z"
-    },
-    {
-      "name": "a4e98bbb5755a2dfe",
-      "role": "general-purpose",
-      "model": "sonnet",
-      "status": "completed",
-      "currentTask": null,
-      "taskId": null,
-      "startedAt": "2026-07-02T13:17:12.979Z",
-      "lastActivityAt": "2026-07-02T13:21:27.805Z"
-    },
-    {
-      "name": "ac0b2a8773d81153d",
-      "role": "general-purpose",
-      "model": "sonnet",
-      "status": "spawning",
-      "currentTask": null,
-      "taskId": null,
-      "startedAt": "2026-07-02T13:17:24.122Z",
-      "lastActivityAt": "2026-07-02T13:17:24.122Z"
-    },
-    {
-      "name": "a6f423c5987211d44",
-      "role": "general-purpose",
-      "model": "sonnet",
-      "status": "spawning",
-      "currentTask": null,
-      "taskId": null,
-      "startedAt": "2026-07-02T13:17:38.038Z",
-      "lastActivityAt": "2026-07-02T13:17:38.038Z"
-    },
-    {
-      "name": "a100b00d9382f9f27",
-      "role": "general-purpose",
-      "model": "sonnet",
-      "status": "completed",
-      "currentTask": null,
-      "taskId": null,
-      "startedAt": "2026-07-02T13:17:47.367Z",
-      "lastActivityAt": "2026-07-02T13:23:01.850Z"
-    },
-    {
-      "name": "af839e5a34a02c59b",
-      "role": "general-purpose",
-      "model": "sonnet",
-      "status": "spawning",
-      "currentTask": null,
-      "taskId": null,
-      "startedAt": "2026-07-02T13:17:58.053Z",
-      "lastActivityAt": "2026-07-02T13:17:58.053Z"
-    },
-    {
-      "name": "ada2014ef8bb4d080",
-      "role": "general-purpose",
-      "model": "sonnet",
-      "status": "completed",
-      "currentTask": null,
-      "taskId": null,
-      "startedAt": "2026-07-02T13:18:15.274Z",
-      "lastActivityAt": "2026-07-02T13:22:40.501Z"
-    }
-  ],
+  "startedAt": "2026-07-02T13:25:53.031Z",
+  "lastUpdated": "2026-07-02T13:38:37.952Z",
+  "teammates": [],
   "progress": {
     "totalTasks": 0,
     "completedTasks": 0,

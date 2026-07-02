@@ -34,6 +34,9 @@ target_sources(Superrack PRIVATE
 
 target_compile_features(Superrack PRIVATE cxx_std_17)
 
+# farbot (MIT, 벤더링) — RT wait-free 체인 스왑 (RealtimeObject 만 사용, fifo 금지)
+target_include_directories(Superrack PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/farbot/include")
+
 # UTF-8 소스 (한국어 주석) — MSVC 코드페이지 경고(C4819) 방지
 if(MSVC)
     target_compile_options(Superrack PRIVATE /utf-8)

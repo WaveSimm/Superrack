@@ -17,28 +17,23 @@ ChannelStrip::~ChannelStrip()
 //==============================================================================
 void ChannelStrip::prepare (double newSampleRate, int newMaxBlock)
 {
+    // 장치 콜백 시작 전(메시지 스레드) — RT 접근 없음.
     sampleRate = newSampleRate;
     maxBlock   = newMaxBlock;
 
     stereoBuffer.setSize (2, juce::jmax (1, maxBlock), false, false, true);
     midiScratch.ensureSize (256);   // 사전 확보 — 오디오 스레드에서 재할당 방지
 
-    // reconfiguring 가드 하에 모든 노드 prepare
-    reconfigure ([this]
-    {
-        for (auto& n : nodes)
-            prepareNode (*n);
-    });
+    for (auto& n : editList)
+        prepareNode (*n);
 }
 
 void ChannelStrip::releaseResources()
 {
-    reconfigure ([this]
-    {
-        for (auto& n : nodes)
-            if (n->plugin != nullptr)
-                n->plugin->releaseResources();
-    });
+    // 장치 정지 후(메시지 스레드) — RT 접근 없음.
+    for (auto& n : editList)
+        if (n->plugin != nullptr)
+            n->plugin->releaseResources();
 }
 
 void ChannelStrip::prepareNode (Node& node)
@@ -53,14 +48,10 @@ void ChannelStrip::prepareNode (Node& node)
 //==============================================================================
 void ChannelStrip::process (const float* in, float* out, int numSamples) noexcept
 {
-    fence.bump();   // R1: 재구성 가드가 콜백 세대로 in-flight 종료를 확인
-
-    // 체인 수정 중·미준비·협상 초과 블록(R2)이면 dry 패스스루 (lock-free).
+    // 미준비·협상 초과 블록(R2)이면 dry 패스스루.
     // 부분 처리(클램프)는 out 꼬리를 미기록으로 남기므로 블록 전체를 통과시킨다.
     jassert (numSamples <= stereoBuffer.getNumSamples() || maxBlock <= 0);
-    if (reconfiguring.load (std::memory_order_acquire)
-        || maxBlock <= 0
-        || numSamples > stereoBuffer.getNumSamples())
+    if (maxBlock <= 0 || numSamples > stereoBuffer.getNumSamples())
     {
         juce::FloatVectorOperations::copy (out, in, numSamples);
         return;
@@ -77,10 +68,13 @@ void ChannelStrip::process (const float* in, float* out, int numSamples) noexcep
 
     midiScratch.clear();
 
-    for (auto& n : nodes)
     {
-        if (n->plugin != nullptr && ! n->bypassed.load (std::memory_order_relaxed))
-            n->plugin->processBlock (proxy, midiScratch);
+        // D2: wait-free 체인 획득 — 편집 중에도 항상 유효한(직전) 체인을 본다.
+        RtChain::ScopedAccess<farbot::ThreadType::realtime> nodes (chain);
+
+        for (const auto& n : *nodes)
+            if (n->plugin != nullptr && ! n->bypassed.load (std::memory_order_relaxed))
+                n->plugin->processBlock (proxy, midiScratch);
     }
 
     // 좌채널을 모노 출력으로 (출력 게인 적용)
@@ -96,20 +90,9 @@ void ChannelStrip::setOutGainDb (float db) noexcept
 }
 
 //==============================================================================
-template <typename Fn>
-void ChannelStrip::reconfigure (Fn&& fn)
-{
-    reconfiguring.store (true, std::memory_order_release);
-    // R1: 콜백 세대가 2 전진하면 in-flight 콜백 종료가 보장된다.
-    // 이 스트립이 콜백에서 처리되지 않는 상태(비활성 채널·장치 정지)면 타임아웃 복귀.
-    fence.waitForIdle (30);
-    fn();
-    reconfiguring.store (false, std::memory_order_release);
-}
-
-std::unique_ptr<ChannelStrip::Node> ChannelStrip::makeNode (const juce::String& path, bool bypass,
-                                                           const juce::String& base64State,
-                                                           juce::String& err)
+std::shared_ptr<ChannelStrip::Node> ChannelStrip::makeNode (const juce::String& path, bool bypass,
+                                                            const juce::String& base64State,
+                                                            juce::String& err)
 {
     // R3: 경로당 1회만 파일 스캔 — 여러 채널에 같은 플러그인 로드 시(세션 복원·
     // 프로파일 체인 복제) 반복 스캔을 제거한다.
@@ -164,7 +147,7 @@ std::unique_ptr<ChannelStrip::Node> ChannelStrip::makeNode (const juce::String& 
             inst->setStateInformation (mb.getData(), (int) mb.getSize());
     }
 
-    auto node = std::make_unique<Node>();
+    auto node = std::make_shared<Node>();
     node->plugin = std::move (inst);
     node->filePath = path;
     node->bypassed.store (bypass, std::memory_order_relaxed);
@@ -177,8 +160,87 @@ bool ChannelStrip::addPlugin (const juce::File& vst3File, juce::String& errorMes
     if (node == nullptr)
         return false;
 
-    reconfigure ([this, &node] { nodes.push_back (std::move (node)); });
+    editList.push_back (std::move (node));
+    publishChain();
     return true;
+}
+
+void ChannelStrip::removePlugin (int index)
+{
+    if (index < 0 || index >= (int) editList.size())
+        return;
+
+    auto removed = editList[(size_t) index];   // 파괴는 publish 후 이 스코프(메시지 스레드)에서
+    editList.erase (editList.begin() + index);
+    publishChain();
+
+    if (removed != nullptr && removed->plugin != nullptr)
+        removed->plugin->releaseResources();
+}
+
+void ChannelStrip::setBypass (int index, bool shouldBypass)
+{
+    // Node 는 RT 뷰와 공유되므로 atomic 만 바꾸면 즉시 반영 — 스왑 불필요.
+    if (index >= 0 && index < (int) editList.size())
+        editList[(size_t) index]->bypassed.store (shouldBypass, std::memory_order_relaxed);
+}
+
+void ChannelStrip::loadChain (const juce::var& pluginsArray, float gainDb, juce::StringArray& errors)
+{
+    // 새 노드들을 먼저 만든다(생성·prepare·setState — 오디오는 그동안 기존 체인 유지).
+    NodeList newList;
+    if (auto* arr = pluginsArray.getArray())
+    {
+        for (auto& e : *arr)
+        {
+            const auto path  = e.getProperty ("path", "").toString();
+            const bool byp   = (bool) e.getProperty ("bypass", false);
+            const auto state = e.getProperty ("state", "").toString();
+
+            juce::String err;
+            if (auto n = makeNode (path, byp, state, err))
+                newList.push_back (std::move (n));
+            else
+                errors.add (err);
+        }
+    }
+
+    NodeList old = std::move (editList);
+    editList = std::move (newList);
+    publishChain();   // 한 번의 스왑 — 구버전 벡터는 여기(메시지 스레드)서 해제
+
+    for (auto& n : old)
+        if (n != nullptr && n->plugin != nullptr)
+            n->plugin->releaseResources();
+
+    setOutGainDb (gainDb);
+}
+
+//==============================================================================
+int ChannelStrip::getNumPlugins() const
+{
+    return (int) editList.size();
+}
+
+juce::String ChannelStrip::getPluginName (int index) const
+{
+    if (index >= 0 && index < (int) editList.size() && editList[(size_t) index]->plugin != nullptr)
+        return editList[(size_t) index]->plugin->getName();
+    return {};
+}
+
+bool ChannelStrip::isBypassed (int index) const
+{
+    if (index >= 0 && index < (int) editList.size())
+        return editList[(size_t) index]->bypassed.load (std::memory_order_relaxed);
+    return false;
+}
+
+juce::AudioPluginInstance* ChannelStrip::getPlugin (int index) const
+{
+    if (index >= 0 && index < (int) editList.size())
+        return editList[(size_t) index]->plugin.get();
+    return nullptr;
 }
 
 //==============================================================================
@@ -189,7 +251,7 @@ juce::var ChannelStrip::getStateVar()
     obj->setProperty ("outGainDb", (double) getOutGainDb());
 
     juce::Array<juce::var> plugins;
-    for (auto& n : nodes)
+    for (auto& n : editList)
     {
         if (n == nullptr || n->plugin == nullptr)
             continue;
@@ -206,84 +268,4 @@ juce::var ChannelStrip::getStateVar()
     }
     obj->setProperty ("plugins", plugins);
     return juce::var (obj);
-}
-
-void ChannelStrip::loadChain (const juce::var& pluginsArray, float gainDb, juce::StringArray& errors)
-{
-    // 새 노드들을 가드 밖에서 미리 만든다(생성·prepare·setState).
-    std::vector<std::unique_ptr<Node>> newNodes;
-    if (auto* arr = pluginsArray.getArray())
-    {
-        for (auto& e : *arr)
-        {
-            const auto path  = e.getProperty ("path", "").toString();
-            const bool byp   = (bool) e.getProperty ("bypass", false);
-            const auto state = e.getProperty ("state", "").toString();
-
-            juce::String err;
-            if (auto n = makeNode (path, byp, state, err))
-                newNodes.push_back (std::move (n));
-            else
-                errors.add (err);
-        }
-    }
-
-    // 한 번의 reconfigure 로 체인 교체 (오디오는 그동안 dry 패스스루).
-    std::vector<std::unique_ptr<Node>> old;
-    reconfigure ([&] { old.swap (nodes); nodes = std::move (newNodes); });
-
-    for (auto& n : old)
-        if (n != nullptr && n->plugin != nullptr)
-            n->plugin->releaseResources();
-
-    setOutGainDb (gainDb);
-}
-
-void ChannelStrip::removePlugin (int index)
-{
-    if (index < 0 || index >= (int) nodes.size())
-        return;
-
-    std::unique_ptr<Node> removed;   // 실제 해제는 가드 밖에서
-    reconfigure ([this, index, &removed]
-    {
-        removed = std::move (nodes[(size_t) index]);
-        nodes.erase (nodes.begin() + index);
-    });
-
-    if (removed != nullptr && removed->plugin != nullptr)
-        removed->plugin->releaseResources();
-}
-
-void ChannelStrip::setBypass (int index, bool shouldBypass)
-{
-    if (index >= 0 && index < (int) nodes.size())
-        nodes[(size_t) index]->bypassed.store (shouldBypass, std::memory_order_relaxed);
-}
-
-//==============================================================================
-int ChannelStrip::getNumPlugins() const
-{
-    return (int) nodes.size();
-}
-
-juce::String ChannelStrip::getPluginName (int index) const
-{
-    if (index >= 0 && index < (int) nodes.size() && nodes[(size_t) index]->plugin != nullptr)
-        return nodes[(size_t) index]->plugin->getName();
-    return {};
-}
-
-bool ChannelStrip::isBypassed (int index) const
-{
-    if (index >= 0 && index < (int) nodes.size())
-        return nodes[(size_t) index]->bypassed.load (std::memory_order_relaxed);
-    return false;
-}
-
-juce::AudioPluginInstance* ChannelStrip::getPlugin (int index) const
-{
-    if (index >= 0 && index < (int) nodes.size())
-        return nodes[(size_t) index]->plugin.get();
-    return nullptr;
 }

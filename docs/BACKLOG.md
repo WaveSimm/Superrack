@@ -12,7 +12,7 @@ P0~P2 완료(실기), P3 견고화 + 통합 타임라인 녹음/재생 + 테이�
 - 결과(96kHz/96smp): 경량 체인(Pro-Q 3) **32ch 안정**, 무거운 체인(Pro-Q 3→Pro-R) **한계 4ch**(부하 채널 선형).
 - 잔여: 다채널 ASIO 장치 확보 시 실기 확장 검증(합성 부하는 드라이버 채널 I/O 오버헤드 미포함).
 
-### A2. 채널 병렬 워커 풀  [P1] — P4 측정 후속 · 기술검토 Top 1
+### A2. 채널 병렬 워커 풀  [P1] — **구현 완료(2026-07-02)** · 실기 재측정 대기
 - 채널 완전 독립(1:1, 합산 없음) → 채널 단위 fork-join 워커 풀로 한계(4ch@96k)를 코어 수 배 확장. ~200-400 LOC 커스텀(범용 taskflow/oneTBB 는 RT 부적합 — 배제).
 - 설계 레퍼런스: tracktion_graph `LockFreeMultiThreadedNodePlayer`(참고만, GPL). 대기 = spin(backoff)→semaphore. Windows: `SetThreadPriority(TIME_CRITICAL)`+MMCSS "Pro Audio"+P-코어 고정, 풀 < 물리 P-코어 수. → [`research/tech-stack-review-2026-07-02.md`](research/tech-stack-review-2026-07-02.md) §3
 - 전제: D2(farbot 체인 스왑) 선행 권장.
@@ -21,7 +21,7 @@ P0~P2 완료(실기), P3 견고화 + 통합 타임라인 녹음/재생 + 테이�
 - **BufferingAudioSource 교체**: "짧은 락"이 아니라 백그라운드 스레드가 callbackLock 을 쥔 채 디스크 read(우선순위 역전, 소스 확인). → 채널당 SPSC 링버퍼 + 리더 스레드(prefetch), 언더런 무음. 레퍼런스: Mixxx CachingReader, Ardour butler. 검토 §5
 - **스템 SR ≠ 장치 SR 리샘플**: 현재 같은 SR 가정(다르면 피치 어긋남). 로드 시 리샘플 또는 경고+차단.
 
-### D2. farbot RealtimeObject 체인 스왑  [P1] — 기술검토 Top 2
+### D2. farbot RealtimeObject 체인 스왑  [P1] — **구현 완료(2026-07-02)** DESIGN §5.8
 - `RealtimeObject<Chain, nonRealtimeMutatable>` 헤더 벤더링(MIT, Tracktion 프로덕션 검증) — reconfiguring 플래그+Fence 수제 패턴을 wait-free 획득 + 비RT 지연 삭제로 대체. **farbot fifo 모듈은 레이스 리포트 있음 — RealtimeObject 만 사용.** 검토 §2
 - A2 병렬화의 전제 조건.
 

@@ -111,6 +111,12 @@
 - **GUI**: 툴바 `CPU 프로파일` 버튼(실행 중 `■ 중단` 토글), 진행 상황은 상태 행 라벨, 완료 시 요약 팝업+리포트 경로. perfLabel 은 `DSP avg% (pk %) xrun` 상시 표시(pk≥95% 또는 xrun>0 시 주황).
 - (제약) 합성 부하는 단일 오디오 스레드 직렬 처리 기준 — 실제 32ch 장치의 드라이버 오버헤드(채널 I/O 전송)는 포함되지 않으므로 실기 확보 시 재검증 필요.
 
+## 5.8 구현 노트 (D2 + A2 — wait-free 체인 스왑 & 채널 병렬 DSP, 2026-07-02)
+- **D2 체인 스왑** (`ChannelStrip`, farbot `RealtimeObject<NodeList, nonRealtimeMutatable>` — ThirdParty/farbot 벤더링, MIT, **fifo 모듈 사용 금지**): 메시지 스레드가 원본 `editList` 수정 후 `publishChain()`(= `nonRealtimeReplace`) 복사 스왑. RT 획득은 wait-free(ScopedAccess), 편집 중에도 dry 갭 없이 직전 체인 유지. 구버전 벡터·노드(shared_ptr) 해제는 항상 메시지 스레드. Bypass 는 공유 Node atomic — 스왑 불필요. 기존 reconfiguring 플래그+CallbackFence 가드는 ChannelStrip 에서 제거(recorder/player 에는 유지).
+- **A2 병렬 DSP** (`Source/AudioWorkerPool.*`): 채널=잡 fork-join. 콜백이 잡 배열 게시 → 티켓 카운터(fetch_add) 클레임으로 워커+오디오 스레드 분담 → jobsDone 스핀 조인. 게이트(GATE_CLOSED=2^40) 덕에 블록 경계에서 늦게 깬 워커의 스테일 클레임은 idx≥count 로 자연 폐기 — 이중 실행 불가. 워커 = `TIME_CRITICAL`+MMCSS "Pro Audio"(프로세스 클래스 불변), 대기 = 짧은 spin→이벤트(2ms 타임아웃 폴백). 워커 수 = 물리코어−2.
+- 적용 경로: 라이브 모니터/녹음, 재생(체인 통과 시), 합성 부하(채널별 스크래치로 분리). GUI 토글 "병렬 DSP ×N"(off=직렬, 프로파일 비교용).
+- 안전성 논거: 한 잡=한 스트립(스트립 내부 버퍼 스레드 격리), 클레임:완료 1:1 이라 조인 후 워커가 잡 실행 중일 수 없음 → 다음 블록 상태 변경과 격리. 잡 배열 가시성은 게이트 release-store ↔ 클레임 acquire RMW 페어링.
+
 ## 5.3 설정 영속화
 - `AudioDeviceManager` 상태를 `%APPDATA%/Superrack/audio-settings.xml` 에 저장/복원. 시작 시 `initialise(2,2, savedState, true)` 로 복원, `ChangeListener` 로 설정 변경마다 + 종료 시 저장. → ASIO 장치/SR/버퍼/채널이 다음 실행에 유지됨.
 - (예정) 플러그인 체인 세션 저장은 Phase 3.

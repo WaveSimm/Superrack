@@ -24,10 +24,10 @@ P0~P2 완료(실기), P3 견고화 + 통합 타임라인 녹음/재생 + 테이�
 - 현재: 펀치 지점부터 **끝까지 덮어쓰기**(펀치아웃 없음). 부분 오버덥(punch-in/out 구간)·구간 선택 편집 추가.
 - 녹음 중 기존 `[0..P)` 프리롤 재생 모니터링(현재 라이브 입력만).
 
-### D. 오디오 스레드 견고화(설계 R1/R2/R3)  [P2]
-- **R1**: `ChannelStrip::reconfigure` / recorder·player stop 가드가 `Thread::sleep(30)` 타이밍 의존 → 더블버퍼/RCU 교체 큐로 정밀화.
-- **R2**: `ChannelStrip::process`에 `numSamples > maxBlock` 방어(jassert/클램프).
-- **R3**: VST3 로드 시 매번 `findAllTypesForFile` 스캔 → `KnownPluginList` 캐시.
+### D. 오디오 스레드 견고화(설계 R1/R2/R3)  [P2] — **완료(2026-07-02 리팩토링)**
+- ~~R1~~ `sr::CallbackFence`(콜백 세대 카운터) 로 in-flight 종료 확인 — ChannelStrip/recorder/player 공통 적용. DESIGN §5.1.
+- ~~R2~~ 협상 초과 블록 dry 패스스루 방어. ~~R3~~ `PluginScanCache` 경로당 1회 스캔.
+- 추가: GUI 구조 분리(ChannelRow.*, UiLookAndFeel.h), peak 스캔 SIMD화. `git init` + 스냅샷/리팩토링 커밋(G 일부 완료).
 
 ### E. 테이크/세션 고도화  [P2]
 - 테이크 목록 UI 고도화(이력/펀치 구간 시각화, 정렬을 updatedAt 기준으로).

@@ -56,7 +56,9 @@
 ```
 
 ## 5.1 구현 노트 (Phase 1)
-- **lock-free 체인 재구성**: 플러그인 추가/제거/순서변경은 메시지 스레드에서만. `ChannelStrip` 의 `reconfiguring` atomic 플래그를 켠 뒤 ~30ms 대기(in-flight 콜백 통과)하고 수정 → 그동안 오디오 콜백은 **dry 패스스루**. 오디오 스레드엔 락 없음(atomic load 1회). 편집 시 짧은 dry 구간은 허용(추후 Phase 3 에서 더 정밀화 가능).
+- **lock-free 체인 재구성**: 플러그인 추가/제거/순서변경은 메시지 스레드에서만. `ChannelStrip` 의 `reconfiguring` atomic 플래그를 켠 뒤 in-flight 콜백 종료를 확인하고 수정 → 그동안 오디오 콜백은 **dry 패스스루**. 오디오 스레드엔 락 없음. **(R1 해소, 2026-07-02)** 종료 확인은 고정 sleep(30) 이 아니라 `sr::CallbackFence`(Util.h) — 오디오 스레드가 콜백마다 세대 카운터를 bump 하고, 메시지 스레드는 세대가 **+2 전진**(= 플래그 이후 시작한 콜백 관측 ⇒ in-flight 종료 보장)할 때까지 대기, 콜백 정지 상태(비활성 채널·장치 정지)면 타임아웃(기존 상한과 동일)으로 복귀. 같은 패턴을 `MultitrackRecorder::stop`·`TimelinePlayer::unload` 에도 적용.
+- **(R2 해소)** `ChannelStrip::process` 는 협상된 maxBlock 초과 블록·미준비 상태에서 dry 패스스루(부분 처리로 out 꼬리를 미기록으로 남기지 않음) + jassert.
+- **(R3 해소)** `PluginScanCache`(경로→PluginDescription, AudioEngine 소유·전 스트립 공유, 메시지 스레드 전용) — `findAllTypesForFile` 파일 스캔을 경로당 1회로. 세션 복원·프로파일 32ch 체인 복제가 크게 빨라짐.
 - **채널 내부 처리**: 모노 입력을 스테레오(2ch)로 복제→체인 처리→좌채널을 모노 출력. Phase 1 은 2ch 이하 플러그인만 허용(초과 시 로드 거부).
 - **JUCE 8.0.11 API**: `AudioPluginFormatManager::addDefaultFormats()` 는 삭제됨 → 자유 함수 `juce::addDefaultFormatsToManager(mgr)` 사용.
 - **에디터 수명**: `PluginWindow`(DocumentWindow) 는 항상 플러그인 인스턴스보다 먼저 파괴(`MainComponent` 멤버 선언 순서로 보장). 플러그인 제거 시 해당 에디터 창 먼저 닫음. 제거 버튼은 `callAsync` 로 지연(콜백 중 자기 파괴 방지).

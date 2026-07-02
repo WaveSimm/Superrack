@@ -1,0 +1,15 @@
+# 빌드 산출물
+/build/
+*.exe
+*.obj
+*.pdb
+
+# JUCE FetchContent 캐시 (필요시)
+_deps/
+
+# 세션 녹음
+/rec/
+
+# IDE
+.vs/
+*.user

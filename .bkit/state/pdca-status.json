@@ -1,0 +1,55 @@
+{
+  "version": "3.0",
+  "lastUpdated": "2026-07-02T00:00:00.000Z",
+  "activeFeatures": ["asio-vst3-host"],
+  "primaryFeature": "asio-vst3-host",
+  "features": {
+    "asio-vst3-host": {
+      "title": "ASIO 다채널 VST3 인서트 프로세서 (Superrack)",
+      "level": "Enterprise",
+      "stack": "JUCE 8 / C++ / CMake / MSVC / ASIO / VST3",
+      "phase": "Do",
+      "planDoc": "docs/01-plan/PLAN.md",
+      "designDoc": "docs/02-design/DESIGN.md",
+      "roadmap": ["P0-scaffold", "P1-vst3-chain", "P2-dry-record", "P3-hardening", "P4-32ch-scale"],
+      "currentMilestone": "P3-hardening + 통합 타임라인 녹음/재생 + 테이크 모델(신규 스코프) 실기 동작 확인. 다음: P4-32ch-scale 또는 재생 견고화. UI: 세로 랙+동적 채널수+셰브런 카드+트랜스포트 행+테이크 셀렉터.",
+      "takeModel": "3파일 계층(설정 audio-settings.xml / 세션 session.json·.superrack / 테이크 takes/<id>/). 테이크=chNN_dry.wav+timeline.json(환경·length·history·updatedAt)+session.json 스냅샷. 녹음=현재 테이크 펀치인 커밋(제자리 갱신, .rectmp 스크래치). 새 테이크 버튼/테이크 셀렉터/삭제. 로드 시 세션 자동복원+환경 SR 불일치 경고. 재생=TimelinePlayer(BufferingAudioSource) playThroughChain 옵션, 라이브입력 뮤트, 통합 playhead.",
+      "report": "docs/reports/2026-07-02-report.md",
+      "backlog": "docs/BACKLOG.md",
+      "latencyProfile": "docs/measurements/latency-ur22mkii.md",
+      "p0Status": "runtime-verified (빌드 OK + ASIO 1:1 패스스루 + 입력 미터 동작 확인)",
+      "p1Status": "runtime-verified (UR22mkII ASIO 48k/64smp, FabFilter Pro-Q 3 체인 동작 확인)",
+      "p3Status": "build-verified (MSVC Release clean). ①채널별 출력게인(ChannelStrip atomic, 행별 LinearBar -60~+12dB, wet만 적용/Dry녹음 무관) ②세션 저장/로드(JSON: device/channels/strips[plugins{path,bypass,base64 state},outGainDb]; 자동복원 %APPDATA%/session.json + 종료/변경시 자동저장 + 수동 세션메뉴 .superrack) ③xrun/CPU 표면화(툴바 우측 CPU%/xrun, xrun시 주황). 실기 검증 대기.",
+      "p2Status": "runtime-verified (UR22mkII 96kHz 루프백). MultitrackRecorder: ThreadedWriter 락프리 FIFO + 채널별 32f 모노 WAV + 녹음 UI. 실기 결과: 포맷(32f 모노)/동기(샘플수 완전일치)/SR-드라이버추종(96k)/연속성 PASS, ch01(In1) vs ch02(Out1->In2) 상관 r=0.972(비포화창)로 충실 캡처 확인. dry(pre-plugin) A/B 실기 확정: Ch1에 Pro-Q3 노치(~3kHz)를 걸고 In1(dry)->ch01 / Out1(wet)->In2->ch02 루프백 녹음. 스펙트럼 비교 결과 저역(20-800Hz) 양 채널 평탄(±0.9dB), 1.7-4.3kHz에서 ch02만 -3dB 국소 딥(스크린샷 노치 위치 일치) -> tap 이 플러그인 앞(dry)임 증명. (측정 딥은 노이즈플로어로 -13->-3dB로 얕아지나 위치/형상 일치).",
+      "device": "Yamaha Steinberg USB ASIO (UR22mkII), 48kHz, 64 samples",
+      "extra": "레이턴시 테스터 + 한글 인코딩 수정(String const char*는 ASCII전용 -> CharPointer_UTF8/sr::u8 헬퍼) + 장치설정 영속화(APPDATA/Superrack/audio-settings.xml). build clean."
+    }
+  },
+  "pipeline": {
+    "currentPhase": 1,
+    "level": "Enterprise",
+    "phaseHistory": []
+  },
+  "session": {
+    "startedAt": "2026-06-29T13:22:12.126Z",
+    "onboardingCompleted": true,
+    "lastActivity": "2026-06-29T13:22:51.570Z"
+  },
+  "history": [],
+  "stateMachine": {
+    "defaultWorkflow": "default",
+    "activeWorkflows": {},
+    "totalTransitions": 0
+  },
+  "automation": {
+    "globalLevel": 2,
+    "trustScore": 40,
+    "pendingApprovals": 0,
+    "lastGateResult": null
+  },
+  "team": {
+    "enabled": true,
+    "stateFile": ".bkit/runtime/agent-state.json",
+    "eventsFile": ".bkit/runtime/agent-events.jsonl"
+  }
+}

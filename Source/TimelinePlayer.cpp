@@ -115,7 +115,8 @@ bool TimelinePlayer::load (const juce::File& dir, int blockSize, juce::String& e
 void TimelinePlayer::unload()
 {
     loaded.store (false, std::memory_order_release);
-    juce::Thread::sleep (20);   // in-flight readBlock 통과 대기 (오디오 스레드 접근 차단)
+    // R1: in-flight readBlock 종료 확인 (재생 중이 아니면 세대가 안 전진 → 타임아웃 복귀)
+    fence.waitForIdle (20);
 
     if (buffering != nullptr)
     {
@@ -140,6 +141,8 @@ void TimelinePlayer::setPosition (juce::int64 s)
 //==============================================================================
 void TimelinePlayer::readBlock (int numSamples) noexcept
 {
+    fence.bump();   // unload 가드용 콜백 세대 기록
+
     if (! loaded.load (std::memory_order_acquire) || buffering == nullptr)
     {
         scratch.clear();

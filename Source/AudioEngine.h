@@ -165,6 +165,7 @@ private:
 
     juce::AudioDeviceManager        deviceManager;
     juce::AudioPluginFormatManager  formatManager;
+    PluginScanCache                 scanCache;        // R3: 전 스트립 공유 스캔 캐시
     std::vector<std::unique_ptr<ChannelStrip>> strips;
     MultitrackRecorder              recorder;
     TimelinePlayer                  player;
@@ -206,6 +207,8 @@ private:
                             int numSamples) noexcept;
 
     void resetPeaks() noexcept;
+    /** 블록 peak(SIMD) 을 채널 미터 atomic 에 기록. 오디오 스레드 전용. */
+    void updateInputPeak (int channel, const float* data, int numSamples) noexcept;
 
     // ── DSP 부하 측정 + 합성 부하 (Phase 4) ──
     std::atomic<int>   synthChannels { 0 };

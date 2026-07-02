@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_audio_formats/juce_audio_formats.h>
+#include "Util.h"
 #include <atomic>
 #include <memory>
 #include <vector>
@@ -45,6 +46,7 @@ private:
     juce::AudioBuffer<float> scratch;
 
     std::atomic<bool> loaded { false };
+    sr::CallbackFence fence;   // R1: unload() 가 in-flight readBlock 종료를 확인
     int         numCh = 0;
     double      sr = 48000.0;
     juce::int64 totalSamples = 0;

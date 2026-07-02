@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_audio_formats/juce_audio_formats.h>
+#include "Util.h"
 #include <atomic>
 #include <memory>
 #include <vector>
@@ -65,6 +66,7 @@ private:
     std::atomic<bool>          active         { false };
     std::atomic<int>           xruns          { 0 };
     std::atomic<juce::int64>   samplesWritten { 0 };
+    sr::CallbackFence          fence;   // R1: stop() 이 in-flight writeBlock 종료를 확인
 
     int    numRecChannels = 0;
     double currentSR      = 48000.0;

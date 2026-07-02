@@ -17,7 +17,7 @@ AudioEngine::AudioEngine()
     // 실제 처리/표시 채널 수는 getActiveChannelCount() 로 제한한다.
     strips.reserve (maxChannels);
     for (int i = 0; i < maxChannels; ++i)
-        strips.push_back (std::make_unique<ChannelStrip> (formatManager));
+        strips.push_back (std::make_unique<ChannelStrip> (formatManager, scanCache));
 }
 
 AudioEngine::~AudioEngine()
@@ -483,6 +483,16 @@ void AudioEngine::resetPeaks() noexcept
         p.store (0.0f, std::memory_order_relaxed);
 }
 
+void AudioEngine::updateInputPeak (int channel, const float* data, int numSamples) noexcept
+{
+    if (channel < 0 || channel >= maxChannels)
+        return;
+
+    const auto range = juce::FloatVectorOperations::findMinAndMax (data, numSamples);
+    const float peak = juce::jmax (std::fabs (range.getStart()), std::fabs (range.getEnd()));
+    inputPeaks[(size_t) channel].store (peak, std::memory_order_relaxed);
+}
+
 //==============================================================================
 void AudioEngine::resetDspLoadStats() noexcept
 {
@@ -670,11 +680,7 @@ void AudioEngine::processAudioBlock (const float* const* inputChannelData,
             const float* stem = (ch < pch) ? player.getChannel (ch) : nullptr;
             if (stem != nullptr)
             {
-                float peak = 0.0f;
-                for (int i = 0; i < numSamples; ++i)
-                    peak = juce::jmax (peak, std::fabs (stem[i]));
-                if (ch < maxChannels)
-                    inputPeaks[(size_t) ch].store (peak, std::memory_order_relaxed);
+                updateInputPeak (ch, stem, numSamples);
 
                 if (thru && ch < (int) strips.size())
                     strips[(size_t) ch]->process (stem, out, numSamples);
@@ -706,16 +712,7 @@ void AudioEngine::processAudioBlock (const float* const* inputChannelData,
         {
             const float* in = inputChannelData[ch];
 
-            // 입력 peak (미터)
-            float peak = 0.0f;
-            for (int i = 0; i < numSamples; ++i)
-            {
-                const float a = std::fabs (in[i]);
-                if (a > peak)
-                    peak = a;
-            }
-            if (ch < maxChannels)
-                inputPeaks[(size_t) ch].store (peak, std::memory_order_relaxed);
+            updateInputPeak (ch, in, numSamples);   // 입력 미터
 
             // 채널 VST3 체인 처리 (체인 비었으면 사실상 패스스루)
             if (ch < (int) strips.size())

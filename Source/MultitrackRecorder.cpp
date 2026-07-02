@@ -1,5 +1,7 @@
 #include "MultitrackRecorder.h"
 
+using sr::u8;
+
 //==============================================================================
 MultitrackRecorder::MultitrackRecorder()
 {
@@ -28,7 +30,7 @@ bool MultitrackRecorder::start (double sampleRate, int numChannels, const juce::
 
     if (sampleRate <= 0.0 || numChannels <= 0)
     {
-        error = juce::String (juce::CharPointer_UTF8 ("장치가 준비되지 않았습니다."));
+        error = u8 ("장치가 준비되지 않았습니다.");
         return false;
     }
 
@@ -36,7 +38,7 @@ bool MultitrackRecorder::start (double sampleRate, int numChannels, const juce::
     auto dir = targetDir;
     if (! dir.createDirectory())
     {
-        error = juce::String (juce::CharPointer_UTF8 ("녹음 폴더 생성 실패: ")) + dir.getFullPathName();
+        error = u8 ("녹음 폴더 생성 실패: ") + dir.getFullPathName();
         return false;
     }
     {
@@ -59,7 +61,7 @@ bool MultitrackRecorder::start (double sampleRate, int numChannels, const juce::
         std::unique_ptr<juce::OutputStream> stream (file.createOutputStream());
         if (stream == nullptr)
         {
-            error = juce::String (juce::CharPointer_UTF8 ("파일 열기 실패: ")) + file.getFullPathName();
+            error = u8 ("파일 열기 실패: ") + file.getFullPathName();
             return false;   // built 은 스코프 종료 시 정리
         }
 
@@ -72,7 +74,7 @@ bool MultitrackRecorder::start (double sampleRate, int numChannels, const juce::
         std::unique_ptr<juce::AudioFormatWriter> writer (wavFormat.createWriterFor (stream, options));
         if (writer == nullptr)
         {
-            error = juce::String (juce::CharPointer_UTF8 ("WAV writer 생성 실패 (ch")) + juce::String (ch + 1) + ")";
+            error = u8 ("WAV writer 생성 실패 (ch") + juce::String (ch + 1) + ")";
             return false;
         }
 
@@ -99,9 +101,8 @@ void MultitrackRecorder::stop()
 
     active.store (false, std::memory_order_release);
 
-    // in-flight 오디오 콜백이 active=false 를 관측하고 빠져나갈 시간을 준다.
-    // (ChannelStrip::reconfigure 와 동일한 가드 — 이후 writers 접근 없음)
-    juce::Thread::sleep (30);
+    // R1: 콜백 세대 2 전진 = in-flight writeBlock 종료 보장(콜백 정지 시 타임아웃).
+    fence.waitForIdle (30);
 
     writers.clear();   // ThreadedWriter 소멸 → FIFO 플러시 + WAV 헤더 마감
     numRecChannels = 0;
@@ -111,6 +112,8 @@ void MultitrackRecorder::stop()
 void MultitrackRecorder::writeBlock (const float* const* inputChannelData,
                                      int numInputChannels, int numSamples) noexcept
 {
+    fence.bump();   // active 여부와 무관하게 콜백 세대 기록 (stop 가드용)
+
     if (! active.load (std::memory_order_acquire))
         return;
 

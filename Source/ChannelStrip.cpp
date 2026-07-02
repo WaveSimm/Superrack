@@ -4,8 +4,8 @@
 using sr::u8;
 
 //==============================================================================
-ChannelStrip::ChannelStrip (juce::AudioPluginFormatManager& formatManager)
-    : formats (formatManager)
+ChannelStrip::ChannelStrip (juce::AudioPluginFormatManager& formatManager, PluginScanCache& cache)
+    : formats (formatManager), scanCache (cache)
 {
 }
 
@@ -53,8 +53,14 @@ void ChannelStrip::prepareNode (Node& node)
 //==============================================================================
 void ChannelStrip::process (const float* in, float* out, int numSamples) noexcept
 {
-    // 체인 수정 중이면 dry 패스스루 (lock-free)
-    if (reconfiguring.load (std::memory_order_acquire))
+    fence.bump();   // R1: 재구성 가드가 콜백 세대로 in-flight 종료를 확인
+
+    // 체인 수정 중·미준비·협상 초과 블록(R2)이면 dry 패스스루 (lock-free).
+    // 부분 처리(클램프)는 out 꼬리를 미기록으로 남기므로 블록 전체를 통과시킨다.
+    jassert (numSamples <= stereoBuffer.getNumSamples() || maxBlock <= 0);
+    if (reconfiguring.load (std::memory_order_acquire)
+        || maxBlock <= 0
+        || numSamples > stereoBuffer.getNumSamples())
     {
         juce::FloatVectorOperations::copy (out, in, numSamples);
         return;
@@ -94,8 +100,9 @@ template <typename Fn>
 void ChannelStrip::reconfigure (Fn&& fn)
 {
     reconfiguring.store (true, std::memory_order_release);
-    // in-flight 오디오 콜백이 플래그를 관측하고 빠져나갈 시간을 준다.
-    juce::Thread::sleep (30);
+    // R1: 콜백 세대가 2 전진하면 in-flight 콜백 종료가 보장된다.
+    // 이 스트립이 콜백에서 처리되지 않는 상태(비활성 채널·장치 정지)면 타임아웃 복귀.
+    fence.waitForIdle (30);
     fn();
     reconfiguring.store (false, std::memory_order_release);
 }
@@ -104,14 +111,27 @@ std::unique_ptr<ChannelStrip::Node> ChannelStrip::makeNode (const juce::String& 
                                                            const juce::String& base64State,
                                                            juce::String& err)
 {
-    juce::OwnedArray<juce::PluginDescription> types;
-    juce::VST3PluginFormat fmt;
-    fmt.findAllTypesForFile (types, path);
-
-    if (types.isEmpty())
+    // R3: 경로당 1회만 파일 스캔 — 여러 채널에 같은 플러그인 로드 시(세션 복원·
+    // 프로파일 체인 복제) 반복 스캔을 제거한다.
+    juce::PluginDescription desc;
+    if (const auto it = scanCache.byPath.find (path); it != scanCache.byPath.end())
     {
-        err = u8 ("VST3 타입을 찾지 못했습니다: ") + juce::File (path).getFileName();
-        return nullptr;
+        desc = it->second;
+    }
+    else
+    {
+        juce::OwnedArray<juce::PluginDescription> types;
+        juce::VST3PluginFormat fmt;
+        fmt.findAllTypesForFile (types, path);
+
+        if (types.isEmpty())
+        {
+            err = u8 ("VST3 타입을 찾지 못했습니다: ") + juce::File (path).getFileName();
+            return nullptr;
+        }
+
+        desc = *types[0];
+        scanCache.byPath[path] = desc;
     }
 
     const double sr = sampleRate > 0.0 ? sampleRate : 48000.0;
@@ -119,7 +139,7 @@ std::unique_ptr<ChannelStrip::Node> ChannelStrip::makeNode (const juce::String& 
 
     juce::String e;
     std::unique_ptr<juce::AudioPluginInstance> inst (
-        formats.createPluginInstance (*types[0], sr, bs, e));
+        formats.createPluginInstance (desc, sr, bs, e));
 
     if (inst == nullptr)
     {

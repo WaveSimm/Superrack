@@ -671,6 +671,8 @@ void AudioEngine::processAudioBlock (const float* const* inputChannelData,
         const bool thru = playThroughChain.load (std::memory_order_relaxed);
         const int  pch  = player.getNumChannels();
 
+        int numJobs = 0;   // 체인 통과 채널만 잡으로 (A2 병렬)
+
         for (int ch = 0; ch < numOutputChannels; ++ch)
         {
             float* out = outputChannelData[ch];
@@ -683,7 +685,7 @@ void AudioEngine::processAudioBlock (const float* const* inputChannelData,
                 updateInputPeak (ch, stem, numSamples);
 
                 if (thru && ch < (int) strips.size())
-                    strips[(size_t) ch]->process (stem, out, numSamples);
+                    jobScratch[(size_t) numJobs++] = { strips[(size_t) ch].get(), stem, out, numSamples };
                 else
                     juce::FloatVectorOperations::copy (out, stem, numSamples);
             }
@@ -693,6 +695,8 @@ void AudioEngine::processAudioBlock (const float* const* inputChannelData,
             }
         }
 
+        workerPool.processJobs (jobScratch.data(), numJobs);
+
         // 끝에 도달하면 정지(라이브 모니터 복귀). 정리는 GUI/다음 재생에서.
         if (player.getPosition() >= player.getTotalSamples())
             transport.store (tsStopped, std::memory_order_release);
@@ -701,6 +705,7 @@ void AudioEngine::processAudioBlock (const float* const* inputChannelData,
     }
 
     const int routed = juce::jmin (numInputChannels, numOutputChannels);
+    int numJobs = 0;   // 채널 = 잡 (A2: 워커+오디오 스레드 분담)
 
     for (int ch = 0; ch < numOutputChannels; ++ch)
     {
@@ -716,7 +721,7 @@ void AudioEngine::processAudioBlock (const float* const* inputChannelData,
 
             // 채널 VST3 체인 처리 (체인 비었으면 사실상 패스스루)
             if (ch < (int) strips.size())
-                strips[(size_t) ch]->process (in, out, numSamples);
+                jobScratch[(size_t) numJobs++] = { strips[(size_t) ch].get(), in, out, numSamples };
             else
                 juce::FloatVectorOperations::copy (out, in, numSamples);
         }
@@ -727,20 +732,23 @@ void AudioEngine::processAudioBlock (const float* const* inputChannelData,
     }
 
     // ── 합성 부하 (Phase 4 프로파일링) ── 물리 채널 이후 strips 를 입력 복제로
-    // 실제 처리해 다채널 CPU 부하를 재현한다. 출력은 스크래치에 버린다.
+    // 실제 처리해 다채널 CPU 부하를 재현한다. 출력은 채널별 스크래치에 버린다.
     const int synthN = juce::jmin (synthChannels.load (std::memory_order_relaxed),
                                    (int) strips.size());
     if (synthN > routed && numInputChannels > 0
-        && synthScratch.getNumSamples() >= numSamples)
+        && synthScratch.getNumSamples() >= numSamples
+        && synthScratch.getNumChannels() >= synthN)
     {
-        float* scratch = synthScratch.getWritePointer (0);
         for (int ch = routed; ch < synthN; ++ch)
         {
             const float* in = inputChannelData[ch % numInputChannels];
             if (in != nullptr)
-                strips[(size_t) ch]->process (in, scratch, numSamples);
+                jobScratch[(size_t) numJobs++] = { strips[(size_t) ch].get(), in,
+                                                   synthScratch.getWritePointer (ch), numSamples };
         }
     }
+
+    workerPool.processJobs (jobScratch.data(), numJobs);
 
     // ── Dry tap ── 스트립은 in→out 으로 처리하므로 inputChannelData 는 원음 그대로다.
     // 채널별 원음을 락프리 FIFO 로 넘긴다(디스크 쓰기는 Writer 스레드).
@@ -762,7 +770,7 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 
     // DSP 부하 측정 준비 (콜백 시작 전 — 오디오 스레드와 경쟁 없음)
     cbSampleRate = sr;
-    synthScratch.setSize (1, juce::jmax (1, bs), false, false, true);
+    synthScratch.setSize (maxChannels, juce::jmax (1, bs), false, false, true);
     dspAvgLocal = 0.0f;
     resetDspLoadStats();
     dspAvg.store (0.0f, std::memory_order_relaxed);

@@ -53,6 +53,7 @@ private:
     juce::TextButton sessionButton  { juce::CharPointer_UTF8 ("세션 \xe2\x96\xbe") };
     juce::TextButton latencyButton  { juce::CharPointer_UTF8 ("RT 레이턴시 (Out1\xe2\x86\x92In2)") };
     juce::TextButton profileButton  { juce::CharPointer_UTF8 ("CPU 프로파일") };
+    juce::ToggleButton parallelToggle;     // 병렬 DSP on/off (A2)
     juce::Label      latencyLabel;
     juce::Label      perfLabel;            // DSP 부하 / 장치 xrun
     int              lastLatencyState = -1;

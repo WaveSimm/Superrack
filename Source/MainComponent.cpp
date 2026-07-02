@@ -104,6 +104,18 @@ MainComponent::MainComponent()
             juce::MessageBoxIconType::InfoIcon, u8 ("CPU 프로파일 완료"), msg);
     };
 
+    // ── 병렬 DSP 토글 (A2) — 워커 수 표시, 끄면 직렬(비교 측정용) ──
+    parallelToggle.setButtonText (u8 ("병렬 DSP ×") + juce::String (engine.getNumDspWorkers() + 1));
+    parallelToggle.setToggleState (engine.isParallelDsp(), juce::dontSendNotification);
+    parallelToggle.setColour (juce::ToggleButton::textColourId, juce::Colours::white);
+    parallelToggle.setTooltip (u8 ("채널 병렬 처리 (워커 ") + juce::String (engine.getNumDspWorkers())
+                               + u8 (" + 오디오 스레드). 끄면 직렬 — 프로파일 비교용."));
+    parallelToggle.onClick = [this]
+    {
+        engine.setParallelDsp (parallelToggle.getToggleState());
+    };
+    addAndMakeVisible (parallelToggle);
+
     perfLabel.setColour (juce::Label::textColourId, juce::Colours::grey);
     perfLabel.setJustificationType (juce::Justification::centredRight);
     addAndMakeVisible (perfLabel);
@@ -310,7 +322,9 @@ void MainComponent::resized()
     latencyButton.setBounds (bar.removeFromLeft (220));
     bar.removeFromLeft (8);
     profileButton.setBounds (bar.removeFromLeft (96));
-    perfLabel.setBounds (bar.removeFromRight (juce::jmin (220, bar.getWidth())));   // 우측 DSP/xrun
+    bar.removeFromLeft (8);
+    parallelToggle.setBounds (bar.removeFromLeft (110));
+    perfLabel.setBounds (bar.removeFromRight (juce::jmin (200, bar.getWidth())));   // 우측 DSP/xrun
 
     area.removeFromTop (6);
 

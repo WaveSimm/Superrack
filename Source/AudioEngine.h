@@ -2,6 +2,7 @@
 
 #include <juce_audio_devices/juce_audio_devices.h>
 #include <juce_audio_processors/juce_audio_processors.h>
+#include "AudioWorkerPool.h"
 #include "ChannelStrip.h"
 #include "MultitrackRecorder.h"
 #include "TimelinePlayer.h"
@@ -131,6 +132,12 @@ public:
     void clearSyntheticStrips();
 
     //==========================================================================
+    // ── 채널 병렬 DSP (A2) ─────────────────────────────────────────────────
+    void setParallelDsp (bool b) noexcept { workerPool.setEnabled (b); }
+    bool isParallelDsp() const noexcept   { return workerPool.isEnabled(); }
+    int  getNumDspWorkers() const noexcept { return workerPool.getNumWorkers(); }
+
+    //==========================================================================
     // ── 세션 저장/로드 (Phase 3) ────────────────────────────────────────────
     /** 현재 채널 체인+게인을 %APPDATA%/Superrack/session.json 에 자동 저장. */
     void autoSaveSession();
@@ -210,9 +217,14 @@ private:
     /** 블록 peak(SIMD) 을 채널 미터 atomic 에 기록. 오디오 스레드 전용. */
     void updateInputPeak (int channel, const float* data, int numSamples) noexcept;
 
+    // ── 채널 병렬 DSP (A2) ──
+    AudioWorkerPool workerPool;
+    std::array<AudioWorkerPool::Job, maxChannels> jobScratch;   // 오디오 스레드 전용
+
     // ── DSP 부하 측정 + 합성 부하 (Phase 4) ──
     std::atomic<int>   synthChannels { 0 };
-    juce::AudioBuffer<float> synthScratch;     // 1 x maxBlock — 합성 채널 출력 폐기 버퍼
+    juce::AudioBuffer<float> synthScratch;     // maxChannels x maxBlock — 합성 채널별 출력 폐기 버퍼
+                                               // (병렬 처리 시 채널 간 공유 금지)
     double             cbSampleRate = 0.0;     // 오디오 스레드 전용 (aboutToStart 에서 설정)
     float              dspAvgLocal  = 0.0f;    // 오디오 스레드 전용 EMA
     std::atomic<float> dspAvg      { 0.0f };

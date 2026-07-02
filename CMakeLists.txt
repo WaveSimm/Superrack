@@ -29,6 +29,7 @@ target_sources(Superrack PRIVATE
     Source/TimelinePlayer.cpp
     Source/TakeManager.cpp
     Source/CpuProfiler.cpp
+    Source/AudioWorkerPool.cpp
     Source/ChannelRow.cpp
     Source/MainComponent.cpp)
 

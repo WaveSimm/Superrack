@@ -166,7 +166,7 @@ void AudioEngine::loadTake (const juce::File& takeDir, juce::String& warning)
         warning = juce::String (juce::CharPointer_UTF8 ("환경 불일치: 이 테이크는 "))
                     + juce::String (info.env.sampleRate / 1000.0, 1) + "kHz"
                     + juce::String (juce::CharPointer_UTF8 (" 로 녹음됨 (현재 장치 "))
-                    + juce::String (curSr / 1000.0, 1) + juce::String (juce::CharPointer_UTF8 ("kHz) — 재생 시 피치·길이가 어긋납니다."));
+                    + juce::String (curSr / 1000.0, 1) + juce::String (juce::CharPointer_UTF8 ("kHz) — 재생은 장치 SR 로 리샘플됩니다. 펀치인 녹음은 SR 을 맞춘 뒤 하세요."));
     }
 
     if (onTakesChanged != nullptr)
@@ -239,7 +239,8 @@ bool AudioEngine::transportPlay (juce::String& error)
             error = u8 ("재생할 테이크가 없습니다. 먼저 녹음하세요.");
             return false;
         }
-        if (! player.load (currentTakeDir, dev->getCurrentBufferSizeSamples(), error))
+        if (! player.load (currentTakeDir, dev->getCurrentBufferSizeSamples(),
+                           dev->getCurrentSampleRate(), error))
             return false;
     }
 
@@ -287,7 +288,8 @@ void AudioEngine::transportStop()
     if (auto* dev = deviceManager.getCurrentAudioDevice(); dev != nullptr && currentTakeDir.isDirectory())
     {
         juce::String e;
-        if (player.load (currentTakeDir, dev->getCurrentBufferSizeSamples(), e))
+        if (player.load (currentTakeDir, dev->getCurrentBufferSizeSamples(),
+                         dev->getCurrentSampleRate(), e))
             player.setPosition ((juce::int64) (playheadSeconds * player.getSampleRate()));
         else
             player.unload();

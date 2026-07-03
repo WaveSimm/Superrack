@@ -118,6 +118,13 @@
 - 적용 경로: 라이브 모니터/녹음, 재생(체인 통과 시), 합성 부하(채널별 스크래치로 분리). GUI 토글 "병렬 DSP ×N"(off=직렬, 프로파일 비교용).
 - 안전성 논거: 한 잡=한 스트립(스트립 내부 버퍼 스레드 격리), 클레임:완료 1:1 이라 조인 후 워커가 잡 실행 중일 수 없음 → 다음 블록 상태 변경과 격리. 잡 배열 가시성은 게이트 release-store ↔ 클레임 acquire RMW 페어링.
 
+## 5.9 재생 스트리밍 (B — BufferingAudioSource 교체, 2026-07-03)
+- `TimelinePlayer` = 채널 공유 SPSC 링버퍼(`AbstractFifo`, 장치 SR ~3초) + 전용 리더 스레드. JUCE `BufferingAudioSource` 는 백그라운드 스레드가 callbackLock 을 쥔 채 디스크 read(우선순위 역전, 검토 §5) → 폐기.
+- 오디오 스레드(`readBlock`)는 FIFO 소비만 — 락·디스크·할당 없음. 언더런 = 무음 + 카운터, 위치는 소비량만큼만 전진(디스크 대기). EOF 는 리더가 표시, 소진 시 위치=total 로 정지 유도.
+- 시크 = epoch 핸드셰이크: `setPosition` 이 epoch++ → 오디오는 ackEpoch 기록 후 validEpoch 될 때까지 무음(소비 정지) → 리더가 ack(또는 30ms 타임아웃, 정지 상태) 확인 후 FIFO 리셋·리필 → validEpoch 발행. setPosition 은 리필 완료를 ≤50ms 대기해 재생 시작이 무음 없이 붙는다.
+- SR 불일치(B-2): 스템 SR ≠ 장치 SR 이면 리더에서 `LagrangeInterpolator` 로 장치 SR 리샘플. 위치/길이/getSampleRate 는 전부 장치 샘플 도메인. 같은 SR 이면 1:1 직행(비트 동일).
+- 메시지↔리더 스레드는 configMutex 로 직렬화(오디오 스레드는 이 뮤텍스에 접근하지 않음).
+
 ## 5.3 설정 영속화
 - `AudioDeviceManager` 상태를 `%APPDATA%/Superrack/audio-settings.xml` 에 저장/복원. 시작 시 `initialise(2,2, savedState, true)` 로 복원, `ChangeListener` 로 설정 변경마다 + 종료 시 저장. → ASIO 장치/SR/버퍼/채널이 다음 실행에 유지됨.
 - **세션 머신 이동성 (2026-07-03)**: 플러그인 항목을 `{path, uid, name, bypass, state}` 로 저장 (uid = VST3 class UID, `PluginDescription::uniqueId`). 로드 시 경로 실패 → 폴백: ① 표준 VST3 위치에서 같은 파일명 검색(+uid 검증) ② uid 로 전체 스캔(scanCache 로 중복 제거). 성공 시 노드의 filePath 를 로컬 경로로 **자기치유** — 다음 저장부터 이 머신 경로가 기록됨. uid 없는 구버전 세션은 파일명 폴백만 적용(하위 호환). base64 state 는 플러그인 내부 포맷이라 머신 무관.

@@ -12,9 +12,9 @@ P0~P2 완료(실기), P3 견고화 + 통합 타임라인 녹음/재생 + 테이�
 - 결과(96kHz/96smp): 경량 체인(Pro-Q 3) **32ch 안정**, 무거운 체인(Pro-Q 3→Pro-R) **한계 4ch**(부하 채널 선형).
 - 잔여: 다채널 ASIO 장치 확보 시 실기 확장 검증(합성 부하는 드라이버 채널 I/O 오버헤드 미포함).
 
-### A2. 채널 병렬 워커 풀  [P1] — **실기 검증 종결(2026-07-03)** · 스톨 이슈는 A3 로 분리
+### A2. 채널 병렬 워커 풀  [P1] — **완전 종결(2026-07-03)** · 스톨 이슈는 A3 로 분리·해결
 - 직렬/병렬 완전 A/B(96k/512 3단): **스피드업 3.0×** @5레인(효율 62%), 한계 4ch→16ch. 48k/256 Q3→R 는 16ch→32ch 여유. → [`measurements/cpu-profile-parallel-2026-07-03.md`](measurements/cpu-profile-parallel-2026-07-03.md)
-- 잔여: 부하 중 체인 편집(D2) 글리치 확인 1건.
+- 부하 중 체인 편집(D2 wait-free 스왑) 글리치 없음 실기 확인(2026-07-03).
 - 설계 레퍼런스: tracktion_graph `LockFreeMultiThreadedNodePlayer`(참고만, GPL). 대기 = spin(backoff)→event. Windows: `TIME_CRITICAL`+MMCSS "Pro Audio", 워커 = 물리코어−2. → [`research/tech-stack-review-2026-07-02.md`](research/tech-stack-review-2026-07-02.md) §3
 
 ### A3. 병렬 모드 간헐 스톨 조사  [P1] — **해결(2026-07-03, 계측 + 3실험)**
@@ -22,9 +22,10 @@ P0~P2 완료(실기), P3 견고화 + 통합 타임라인 녹음/재생 + 테이�
 - **기본값 개정**: 워커 = 물리코어 **−3** + MMCSS **미등록**(TIME_CRITICAL 만). 오버라이드 `SUPERRACK_WORKERS` / `SUPERRACK_MMCSS=1`. 96k/96 Q3→R 한계 8ch(직렬 2×), 최악 블록 12.4→1.3ms.
 - 부산물: 잡별 스파이크 계측(리포트 "스파이크 상세") 상시 탑재 — 향후 스톨 재발 시 즉시 판별 가능.
 
-### B. 재생 견고화  [P1] — 기술검토 Top 3
-- **BufferingAudioSource 교체**: "짧은 락"이 아니라 백그라운드 스레드가 callbackLock 을 쥔 채 디스크 read(우선순위 역전, 소스 확인). → 채널당 SPSC 링버퍼 + 리더 스레드(prefetch), 언더런 무음. 레퍼런스: Mixxx CachingReader, Ardour butler. 검토 §5
-- **스템 SR ≠ 장치 SR 리샘플**: 현재 같은 SR 가정(다르면 피치 어긋남). 로드 시 리샘플 또는 경고+차단.
+### B. 재생 견고화  [P1] — **완료(2026-07-03, 실기 검증)**
+- ~~BufferingAudioSource 교체~~: TimelinePlayer 를 채널 공유 SPSC 링(AbstractFifo, ~3초) + 전용 리더 스레드(prefetch)로 재작성. 오디오 스레드는 소비만(무락·무디스크), 언더런 무음+카운터(getUnderrunCount). 시크 = epoch 핸드셰이크(오디오 ack → 리셋·리필, 리필 완료까지 setPosition 이 ≤50ms 대기 → 시작 무음 없음).
+- ~~스템 SR ≠ 장치 SR~~: 리더 스레드에서 LagrangeInterpolator 리샘플 — 피치/길이 정상. 위치·길이는 장치 샘플 도메인 통일. 테이크 선택 경고 문구를 리샘플 안내로 갱신(펀치인은 여전히 SR 일치 권장).
+- 실기 검증(2026-07-03): 재생 시작 무음 없음 / 정지·재생중 시크 클릭 없음 / 96k 테이크→48k 장치 리샘플 피치 정상 / 경고 문구 확인. 전부 PASS.
 
 ### D2. farbot RealtimeObject 체인 스왑  [P1] — **구현 완료(2026-07-02)** DESIGN §5.8
 - `RealtimeObject<Chain, nonRealtimeMutatable>` 헤더 벤더링(MIT, Tracktion 프로덕션 검증) — reconfiguring 플래그+Fence 수제 패턴을 wait-free 획득 + 비RT 지연 삭제로 대체. **farbot fifo 모듈은 레이스 리포트 있음 — RealtimeObject 만 사용.** 검토 §2

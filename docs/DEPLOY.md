@@ -26,7 +26,8 @@ cmake --build build --config Release --target SuperrackBeta
 - **기록**: `%APPDATA%/Superrack/.beta-state` + HKCU 레지스트리 **이중 저장**(한쪽 삭제로 리셋 불가, 이른 first 채택). 체크섬 포함 난독 인코딩 + 시계 되돌림 감지.
 - **한계**: 배포 관리용 게이트이지 DRM 아님 — %APPDATA%+레지스트리 동시 삭제, 시계 조작, 인코딩 리버스로 우회 가능. 신뢰 테스터 대상 기간 제한 용도.
 - **기간 변경**: CMake `SUPERRACK_BETA_DAYS` 값 수정 후 재빌드.
-- **QA 훅**: `SUPERRACK_BETA_TODAY=<epoch일>` 환경변수로 시간 경과 시뮬레이션(만료 테스트용). 판정 로직은 `SuperrackTests` 의 `testBetaGate` 가 회귀 검증.
+- **QA 훅(Debug 전용)**: `SUPERRACK_BETA_TODAY=<epoch일>` 환경변수로 시간 경과 시뮬레이션. **`JUCE_DEBUG` 에서만 컴파일 — Release 배포본에는 없음**(환경변수 우회 불가). 만료 e2e 확인은 `--config Debug` 로 `SuperrackBeta` 빌드 후. 판정 로직은 `SuperrackTests` 의 `testBetaGate` 가 회귀 검증.
+- **배포 체크리스트**: 반드시 `--config Release` 로 빌드(Debug 는 시뮬레이션 훅 포함). 빌드 후 `%APPDATA%/Superrack/.beta-state` + HKCU `Software\Superrack\BetaState` 가 개발 머신에 남아 있지 않은지 확인(테스트 잔재 시 받는 쪽 기간에 영향 없음 — 기록은 각 머신 로컬).
 
 ## 테스트
 

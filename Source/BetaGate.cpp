@@ -43,10 +43,13 @@ BetaGate::Status BetaGate::checkAndTouch (int trialDays)
 //==============================================================================
 juce::int64 BetaGate::todayEpochDays() noexcept
 {
-    // 테스트/QA 훅: 시간 경과 시뮬레이션 (SUPERRACK_BETA_TODAY = epoch days).
+   #if JUCE_DEBUG
+    // 테스트/QA 훅(Debug 전용): 시간 경과 시뮬레이션. Release 배포본에는 컴파일되지
+    // 않는다 — 환경변수로 만료를 우회할 수 없다.
     if (const auto o = juce::SystemStats::getEnvironmentVariable ("SUPERRACK_BETA_TODAY", "");
         o.isNotEmpty())
         return o.getLargeIntValue();
+   #endif
 
     return juce::Time::currentTimeMillis() / (24LL * 3600 * 1000);
 }

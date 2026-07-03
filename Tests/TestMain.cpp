@@ -17,6 +17,7 @@
 
 #include "../Source/AppSettings.h"
 #include "../Source/AudioWorkerPool.h"
+#include "../Source/BetaGate.h"
 #include "../Source/ChannelStrip.h"
 #include "../Source/MultitrackRecorder.h"
 #include "../Source/TakeManager.h"
@@ -424,6 +425,37 @@ static void testWorkerPool()
 }
 
 //==============================================================================
+static void testBetaGate()
+{
+    section ("BetaGate (베타 만료 판정 — 순수 로직)");
+    const juce::int64 d0 = 20000;   // 임의 epoch 일
+
+    // 최초 실행일 = 0일차: 15일 전체 사용 가능
+    auto s = BetaGate::evaluate (d0, d0, d0, 15);
+    EXPECT (! s.expired && s.daysLeft == 15);
+
+    // 14일차: 마지막 사용 가능일
+    s = BetaGate::evaluate (d0, d0 + 13, d0 + 14, 15);
+    EXPECT (! s.expired && s.daysLeft == 1);
+
+    // 15일차: 만료 ("15일 뒤 자동으로 실행 안 됨")
+    s = BetaGate::evaluate (d0, d0 + 14, d0 + 15, 15);
+    EXPECT (s.expired && s.daysLeft == 0);
+
+    // 훨씬 뒤
+    s = BetaGate::evaluate (d0, d0 + 14, d0 + 100, 15);
+    EXPECT (s.expired);
+
+    // 시계 되돌림: 마지막 실행일보다 2일 이상 과거 → 만료 처리
+    s = BetaGate::evaluate (d0, d0 + 10, d0 + 5, 15);
+    EXPECT (s.expired);
+
+    // 하루 되돌림은 허용 (시간대/서머타임 여유)
+    s = BetaGate::evaluate (d0, d0 + 6, d0 + 5, 15);
+    EXPECT (! s.expired);
+}
+
+//==============================================================================
 int main()
 {
     // 테스트 격리: 설정/저장이 실제 사용자 데이터에 닿지 않게 샌드박스로.
@@ -444,6 +476,7 @@ int main()
     testTakeManager (sandbox);
     testTimelinePlayer (sandbox);
     testWorkerPool();
+    testBetaGate();                 // 순수 판정만 — checkAndTouch 는 실제 APPDATA/레지스트리를 써서 제외
 
     std::cout << "\n결과: " << gPass << " passed, " << gFail << " failed\n";
     return gFail == 0 ? 0 : 1;

@@ -1,13 +1,25 @@
 #include <juce_gui_extra/juce_gui_extra.h>
 #include "MainComponent.h"
 
+#if SUPERRACK_BETA
+ #include "BetaGate.h"
+ #include "Util.h"
+#endif
+
 //==============================================================================
 class SuperrackApplication : public juce::JUCEApplication
 {
 public:
     SuperrackApplication() = default;
 
-    const juce::String getApplicationName() override       { return "Superrack"; }
+    const juce::String getApplicationName() override
+    {
+       #if SUPERRACK_BETA
+        return "Superrack Beta";
+       #else
+        return "Superrack";
+       #endif
+    }
     const juce::String getApplicationVersion() override    { return "0.1.0"; }
     bool moreThanOneInstanceAllowed() override             { return false; }
 
@@ -17,7 +29,26 @@ public:
         juce::LookAndFeel::getDefaultLookAndFeel()
             .setDefaultSansSerifTypefaceName ("Malgun Gothic");
 
-        mainWindow.reset (new MainWindow (getApplicationName()));
+        juce::String title = getApplicationName();
+
+       #if SUPERRACK_BETA
+        // 베타 게이트: 이 머신 최초 실행일 + SUPERRACK_BETA_DAYS 일 후 실행 차단.
+        const auto beta = BetaGate::checkAndTouch (SUPERRACK_BETA_DAYS);
+        if (beta.expired)
+        {
+            juce::NativeMessageBox::showMessageBoxAsync (
+                juce::MessageBoxIconType::InfoIcon,
+                sr::u8 ("베타 기간 만료"),
+                sr::u8 ("이 베타 빌드의 평가 기간(") + juce::String (SUPERRACK_BETA_DAYS)
+                    + sr::u8 ("일)이 끝났습니다.\n정식 빌드를 사용하거나 새 베타를 받아주세요."),
+                nullptr,
+                juce::ModalCallbackFunction::create ([] (int) { JUCEApplication::getInstance()->quit(); }));
+            return;   // 창을 만들지 않음 — 안내 후 종료
+        }
+        title << sr::u8 (" — 남은 기간 ") << beta.daysLeft << sr::u8 ("일");
+       #endif
+
+        mainWindow.reset (new MainWindow (title));
     }
 
     void shutdown() override

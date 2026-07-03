@@ -69,12 +69,65 @@ target_link_libraries(Superrack PRIVATE
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags)
 
+# ── 베타 배포 타깃 — 머신별 최초 실행 + 15일 후 만료 (BetaGate) ────────────────
+# 기본 빌드에서 제외: cmake --build build --config Release --target SuperrackBeta
+juce_add_gui_app(SuperrackBeta
+    PRODUCT_NAME "Superrack Beta"
+    COMPANY_NAME "Superrack"
+    EXCLUDE_FROM_ALL TRUE)
+
+target_sources(SuperrackBeta PRIVATE
+    Source/Main.cpp
+    Source/AppSettings.cpp
+    Source/AudioEngine.cpp
+    Source/BetaGate.cpp
+    Source/ChannelStrip.cpp
+    Source/MultitrackRecorder.cpp
+    Source/TimelinePlayer.cpp
+    Source/TakeManager.cpp
+    Source/CpuProfiler.cpp
+    Source/AudioWorkerPool.cpp
+    Source/ChannelRow.cpp
+    Source/MainComponent.cpp)
+
+target_compile_features(SuperrackBeta PRIVATE cxx_std_17)
+target_include_directories(SuperrackBeta PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/farbot/include")
+
+if(MSVC)
+    target_compile_options(SuperrackBeta PRIVATE /utf-8)
+endif()
+
+target_compile_definitions(SuperrackBeta PRIVATE
+    JUCE_ASIO=1
+    JUCE_PLUGINHOST_VST3=1
+    JUCE_USE_CURL=0
+    JUCE_WEB_BROWSER=0
+    JUCE_STRICT_REFCOUNTEDPOINTER=1
+    SUPERRACK_BETA=1
+    SUPERRACK_BETA_DAYS=15)
+
+if(ASIO_SDK_DIR)
+    target_include_directories(SuperrackBeta PRIVATE "${ASIO_SDK_DIR}")
+endif()
+
+target_link_libraries(SuperrackBeta PRIVATE
+    juce::juce_audio_devices
+    juce::juce_audio_processors
+    juce::juce_audio_formats
+    juce::juce_audio_utils
+    juce::juce_gui_basics
+    juce::juce_gui_extra
+    PUBLIC
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_warning_flags)
+
 # ── L1 테스트 타깃 (QA Phase, BACKLOG G) — 헤드리스 콘솔, ASIO/플러그인 불필요 ──
 juce_add_console_app(SuperrackTests PRODUCT_NAME "SuperrackTests")
 
 target_sources(SuperrackTests PRIVATE
     Tests/TestMain.cpp
     Source/AppSettings.cpp
+    Source/BetaGate.cpp
     Source/ChannelStrip.cpp
     Source/MultitrackRecorder.cpp
     Source/TimelinePlayer.cpp

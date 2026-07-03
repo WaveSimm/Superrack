@@ -119,7 +119,7 @@
 
 ## 5.3 설정 영속화
 - `AudioDeviceManager` 상태를 `%APPDATA%/Superrack/audio-settings.xml` 에 저장/복원. 시작 시 `initialise(2,2, savedState, true)` 로 복원, `ChangeListener` 로 설정 변경마다 + 종료 시 저장. → ASIO 장치/SR/버퍼/채널이 다음 실행에 유지됨.
-- (예정) 플러그인 체인 세션 저장은 Phase 3.
+- **세션 머신 이동성 (2026-07-03)**: 플러그인 항목을 `{path, uid, name, bypass, state}` 로 저장 (uid = VST3 class UID, `PluginDescription::uniqueId`). 로드 시 경로 실패 → 폴백: ① 표준 VST3 위치에서 같은 파일명 검색(+uid 검증) ② uid 로 전체 스캔(scanCache 로 중복 제거). 성공 시 노드의 filePath 를 로컬 경로로 **자기치유** — 다음 저장부터 이 머신 경로가 기록됨. uid 없는 구버전 세션은 파일명 폴백만 적용(하위 호환). base64 state 는 플러그인 내부 포맷이라 머신 무관.
 
 ## 6. 빌드 구성
 `juce_add_gui_app`, 컴파일 정의 `JUCE_ASIO=1` / `JUCE_PLUGINHOST_VST3=1` / `JUCE_USE_CURL=0` / `JUCE_WEB_BROWSER=0`. 링크: `juce_audio_devices/processors/formats/utils`, `gui_basics/gui_extra`, recommended config·warning flags. JUCE는 CMake `FetchContent`로 8.0.11 태그 고정.

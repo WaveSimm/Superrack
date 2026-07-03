@@ -90,31 +90,89 @@ void ChannelStrip::setOutGainDb (float db) noexcept
 }
 
 //==============================================================================
-std::shared_ptr<ChannelStrip::Node> ChannelStrip::makeNode (const juce::String& path, bool bypass,
-                                                            const juce::String& base64State,
-                                                            juce::String& err)
+bool ChannelStrip::scanPath (const juce::String& path, juce::PluginDescription& out)
 {
     // R3: 경로당 1회만 파일 스캔 — 여러 채널에 같은 플러그인 로드 시(세션 복원·
     // 프로파일 체인 복제) 반복 스캔을 제거한다.
-    juce::PluginDescription desc;
     if (const auto it = scanCache.byPath.find (path); it != scanCache.byPath.end())
     {
-        desc = it->second;
+        out = it->second;
+        return true;
     }
-    else
-    {
-        juce::OwnedArray<juce::PluginDescription> types;
-        juce::VST3PluginFormat fmt;
-        fmt.findAllTypesForFile (types, path);
 
-        if (types.isEmpty())
+    juce::OwnedArray<juce::PluginDescription> types;
+    juce::VST3PluginFormat fmt;
+    fmt.findAllTypesForFile (types, path);
+
+    if (types.isEmpty())
+        return false;
+
+    out = *types[0];
+    scanCache.byPath[path] = out;
+    return true;
+}
+
+bool ChannelStrip::findByFallback (const juce::String& originalPath, int uid,
+                                   juce::PluginDescription& out)
+{
+    juce::VST3PluginFormat fmt;
+    const auto locations = fmt.getDefaultLocationsToSearch();
+
+    auto uidMatches = [uid] (const juce::PluginDescription& d)
+    {
+        return uid == 0 || d.uniqueId == uid || d.deprecatedUid == uid;
+    };
+
+    // ① 빠른 경로: 표준 위치에서 같은 파일명(.vst3 는 파일 또는 번들 폴더).
+    //    다른 드라이브/폴더에 설치된 흔한 케이스를 전체 스캔 없이 해결.
+    if (const auto fileName = juce::File (originalPath).getFileName(); fileName.isNotEmpty())
+    {
+        for (int i = 0; i < locations.getNumPaths(); ++i)
         {
-            err = u8 ("VST3 타입을 찾지 못했습니다: ") + juce::File (path).getFileName();
+            const auto dir = locations[i];
+            if (! dir.isDirectory())
+                continue;
+
+            for (const auto& f : dir.findChildFiles (juce::File::findFilesAndDirectories,
+                                                     true, fileName))
+                if (juce::PluginDescription d; scanPath (f.getFullPathName(), d) && uidMatches (d))
+                {
+                    out = d;
+                    return true;
+                }
+        }
+    }
+
+    // ② uid 전체 스캔: 파일명까지 바뀐 경우. 표준 위치의 모든 VST3 를 스캔하므로
+    //    느릴 수 있으나(1회성 폴백, scanCache 로 중복 제거) 세션 유실보다 낫다.
+    if (uid != 0)
+        for (const auto& id : fmt.searchPathsForPlugins (locations, true, false))
+            if (juce::PluginDescription d; scanPath (id, d)
+                && (d.uniqueId == uid || d.deprecatedUid == uid))
+            {
+                out = d;
+                return true;
+            }
+
+    return false;
+}
+
+std::shared_ptr<ChannelStrip::Node> ChannelStrip::makeNode (const juce::String& path, bool bypass,
+                                                            const juce::String& base64State,
+                                                            juce::String& err,
+                                                            int uid, const juce::String& displayName)
+{
+    juce::PluginDescription desc;
+    if (! scanPath (path, desc))
+    {
+        // 경로 유실(다른 머신에서 저장된 세션 등) — uid/파일명으로 재탐색.
+        if (! findByFallback (path, uid, desc))
+        {
+            err = u8 ("플러그인을 찾지 못했습니다(경로·재탐색 모두 실패): ")
+                  + (displayName.isNotEmpty() ? displayName
+                                              : juce::File (path).getFileName());
             return nullptr;
         }
-
-        desc = *types[0];
-        scanCache.byPath[path] = desc;
     }
 
     const double sr = sampleRate > 0.0 ? sampleRate : 48000.0;
@@ -149,7 +207,9 @@ std::shared_ptr<ChannelStrip::Node> ChannelStrip::makeNode (const juce::String& 
 
     auto node = std::make_shared<Node>();
     node->plugin = std::move (inst);
-    node->filePath = path;
+    // 폴백으로 찾았으면 로컬 경로로 자기치유 — 다음 저장부터 이 머신 경로가 기록됨.
+    node->filePath = desc.fileOrIdentifier.isNotEmpty() ? desc.fileOrIdentifier : path;
+    node->uid = desc.uniqueId != 0 ? desc.uniqueId : desc.deprecatedUid;
     node->bypassed.store (bypass, std::memory_order_relaxed);
     return node;
 }
@@ -196,9 +256,11 @@ void ChannelStrip::loadChain (const juce::var& pluginsArray, float gainDb, juce:
             const auto path  = e.getProperty ("path", "").toString();
             const bool byp   = (bool) e.getProperty ("bypass", false);
             const auto state = e.getProperty ("state", "").toString();
+            const int  uid   = (int) e.getProperty ("uid", 0);        // 구버전 세션엔 없음(0)
+            const auto pname = e.getProperty ("name", "").toString();
 
             juce::String err;
-            if (auto n = makeNode (path, byp, state, err))
+            if (auto n = makeNode (path, byp, state, err, uid, pname))
                 newList.push_back (std::move (n));
             else
                 errors.add (err);
@@ -258,6 +320,8 @@ juce::var ChannelStrip::getStateVar()
 
         auto* p = new juce::DynamicObject();
         p->setProperty ("path",   n->filePath);
+        p->setProperty ("uid",    n->uid);                    // 머신 독립 식별자 (경로 폴백용)
+        p->setProperty ("name",   n->plugin->getName());      // 폴백 실패 시 에러 표시용
         p->setProperty ("bypass", n->bypassed.load (std::memory_order_relaxed));
 
         juce::MemoryBlock mb;

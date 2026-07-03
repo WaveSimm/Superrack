@@ -75,7 +75,9 @@ public:
 
     //==========================================================================
     // ── 세션 직렬화 (메시지 스레드) ─────────────────────────────────────────
-    /** 이 채널 상태를 var(DynamicObject)로: { outGainDb, plugins:[{path,bypass,state}] }. */
+    /** 이 채널 상태를 var(DynamicObject)로:
+        { outGainDb, plugins:[{path,uid,name,bypass,state}] }.
+        uid/name 은 머신 이동 시 경로 폴백 재탐색용(아래 loadChain 참조). */
     juce::var getStateVar();
     /** var 의 plugins 배열 + 게인으로 체인을 통째로 교체(한 번의 스왑). */
     void loadChain (const juce::var& pluginsArray, float gainDb, juce::StringArray& errors);
@@ -85,7 +87,8 @@ private:
     {
         std::unique_ptr<juce::AudioPluginInstance> plugin;
         std::atomic<bool> bypassed { false };
-        juce::String filePath;        // 세션 복원용 .vst3 경로
+        juce::String filePath;        // 세션 복원용 .vst3 경로 (폴백 성공 시 로컬 경로로 갱신됨)
+        int          uid = 0;         // VST3 class UID (PluginDescription::uniqueId) — 머신 독립 식별자
     };
 
     /** shared_ptr 벡터 = 복사 가능(farbot 요구) + 노드 파괴는 마지막 참조 소유
@@ -93,9 +96,19 @@ private:
     using NodeList = std::vector<std::shared_ptr<Node>>;
     using RtChain  = farbot::RealtimeObject<NodeList, farbot::RealtimeObjectOptions::nonRealtimeMutatable>;
 
-    /** path+state 로 노드 1개 생성(prepare·setState 포함). 실패 시 nullptr. */
+    /** path+state 로 노드 1개 생성(prepare·setState 포함). 실패 시 nullptr.
+        경로가 죽어 있으면(다른 머신에서 저장된 세션) uid/displayName 으로
+        표준 VST3 위치에서 재탐색한다. */
     std::shared_ptr<Node> makeNode (const juce::String& path, bool bypass,
-                                    const juce::String& base64State, juce::String& err);
+                                    const juce::String& base64State, juce::String& err,
+                                    int uid = 0, const juce::String& displayName = {});
+
+    /** 경로를 스캔해 desc 획득 (scanCache 경유, R3). 실패 시 false. */
+    bool scanPath (const juce::String& path, juce::PluginDescription& out);
+
+    /** 경로 실패 시 폴백: ① 표준 VST3 위치에서 같은 파일명 검색(+uid 검증)
+        ② uid 로 전체 스캔. 성공 시 out 채우고 true. 메시지 스레드 전용. */
+    bool findByFallback (const juce::String& originalPath, int uid, juce::PluginDescription& out);
     void prepareNode (Node& node);
 
     /** editList 를 RT 뷰로 복사 스왑(메시지 스레드). 구버전은 여기서 해제. */

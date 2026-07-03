@@ -1,4 +1,5 @@
 #include "AudioEngine.h"
+#include "AppSettings.h"
 #include "Util.h"
 #include <cmath>
 
@@ -89,9 +90,7 @@ void AudioEngine::stopRecording()
 //==============================================================================
 juce::File AudioEngine::getRecTmpDir()
 {
-    return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
-               .getChildFile ("Superrack")
-               .getChildFile (".rectmp");
+    return AppSettings::get().storageRoot().getChildFile (".rectmp");
 }
 
 void AudioEngine::refreshTakeLength()

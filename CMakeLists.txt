@@ -23,6 +23,7 @@ juce_add_gui_app(Superrack
 
 target_sources(Superrack PRIVATE
     Source/Main.cpp
+    Source/AppSettings.cpp
     Source/AudioEngine.cpp
     Source/ChannelStrip.cpp
     Source/MultitrackRecorder.cpp

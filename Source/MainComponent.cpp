@@ -1,4 +1,5 @@
 #include "MainComponent.h"
+#include "AppSettings.h"
 #include "UiLookAndFeel.h"
 #include "Util.h"
 
@@ -6,19 +7,176 @@ using sr::u8;
 using sr::boldButtonLnf;
 
 //==============================================================================
-// SettingsWindow — 장치 설정을 담는 별도 창
+// AppSettingsPanel — 저장 위치 / VST3 추가 경로 / 병렬 워커 수 (범용화 설정)
 //==============================================================================
-SettingsWindow::SettingsWindow (juce::AudioDeviceManager& dm, std::function<void()> onCloseCallback)
-    : DocumentWindow (u8 ("오디오 설정"), juce::Colours::darkgrey, DocumentWindow::closeButton),
+class AppSettingsPanel : public juce::Component
+{
+public:
+    explicit AppSettingsPanel (AudioEngine& eng) : engine (eng)
+    {
+        auto initLabel = [this] (juce::Label& l, const juce::String& text)
+        {
+            l.setText (text, juce::dontSendNotification);
+            l.setFont (juce::FontOptions (13.0f));
+            addAndMakeVisible (l);
+        };
+
+        // ── 저장 위치 ──
+        initLabel (storageTitle, u8 ("녹음/테이크 저장 위치"));
+        storagePath.setReadOnly (true);
+        storagePath.setCaretVisible (false);
+        addAndMakeVisible (storagePath);
+
+        browseButton.onClick = [this]
+        {
+            chooser = std::make_unique<juce::FileChooser> (
+                u8 ("녹음/테이크 저장 폴더 선택"), AppSettings::get().storageRoot());
+            chooser->launchAsync (juce::FileBrowserComponent::openMode
+                                      | juce::FileBrowserComponent::canSelectDirectories,
+                [this] (const juce::FileChooser& fc)
+                {
+                    if (fc.getResult() == juce::File())
+                        return;
+                    AppSettings::get().setStorageRoot (fc.getResult());
+                    refresh();
+                    if (engine.onTakesChanged != nullptr)
+                        engine.onTakesChanged();   // 테이크 목록이 새 루트 기준으로 갱신
+                });
+        };
+        addAndMakeVisible (browseButton);
+
+        defaultButton.onClick = [this]
+        {
+            AppSettings::get().setStorageRoot ({});
+            refresh();
+            if (engine.onTakesChanged != nullptr)
+                engine.onTakesChanged();
+        };
+        addAndMakeVisible (defaultButton);
+
+        initLabel (storageHint, u8 ("변경 시 새 테이크부터 적용 — 기존 테이크는 이전 위치에 남습니다. "
+                                    "클라우드 동기화 폴더(OneDrive 등)는 녹음 중 I/O 간섭이 있어 로컬 드라이브 권장."));
+        storageHint.setFont (juce::FontOptions (11.0f));
+        storageHint.setColour (juce::Label::textColourId, juce::Colours::grey);
+
+        // ── VST3 검색 경로 ──
+        initLabel (vst3Title, u8 ("VST3 검색 경로 — 회색 = 기본(항상 검색, 편집 불가), 아래에 추가 (한 줄에 하나)"));
+
+        // 기본 검색 위치: 입력 박스 상단에 회색 고정 줄로 표시 (읽기전용).
+        {
+            juce::VST3PluginFormat fmt;
+            const auto defaults = fmt.getDefaultLocationsToSearch();
+            juce::StringArray lines;
+            for (int i = 0; i < defaults.getNumPaths(); ++i)
+                lines.add (defaults[i].getFullPathName());
+            numDefaultLines = juce::jmax (1, lines.size());
+
+            vst3Defaults.setMultiLine (true);
+            vst3Defaults.setReadOnly (true);
+            vst3Defaults.setCaretVisible (false);
+            vst3Defaults.setColour (juce::TextEditor::textColourId, juce::Colours::grey);
+            vst3Defaults.setText (lines.joinIntoString ("\n"), juce::dontSendNotification);
+            addAndMakeVisible (vst3Defaults);
+        }
+
+        vst3Paths.setMultiLine (true);
+        vst3Paths.setReturnKeyStartsNewLine (true);
+        vst3Paths.setTextToShowWhenEmpty (u8 ("예) D:\\MyPlugins\\VST3"), juce::Colours::grey);
+        vst3Paths.onFocusLost = [this]
+        {
+            juce::StringArray lines;
+            lines.addLines (vst3Paths.getText());
+            lines.removeEmptyStrings (true);
+            AppSettings::get().setVst3ExtraPaths (lines);
+        };
+        addAndMakeVisible (vst3Paths);
+
+        // ── 병렬 워커 수 ──
+        initLabel (workerTitle, u8 ("병렬 DSP 워커 수 (재시작 후 적용)"));
+        workerCombo.addItem (u8 ("자동 (물리코어-3)"), 1);
+        for (int n = 1; n <= 6; ++n)
+            workerCombo.addItem (juce::String (n), n + 1);
+        workerCombo.onChange = [this]
+        {
+            AppSettings::get().setWorkerCountOverride (workerCombo.getSelectedId() - 1);
+        };
+        addAndMakeVisible (workerCombo);
+
+        refresh();
+        setSize (540, 232 + 17 * numDefaultLines);
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (12, 8);
+
+        storageTitle.setBounds (r.removeFromTop (20));
+        auto row = r.removeFromTop (26);
+        defaultButton.setBounds (row.removeFromRight (70));   row.removeFromRight (6);
+        browseButton.setBounds  (row.removeFromRight (70));   row.removeFromRight (8);
+        storagePath.setBounds (row);
+        storageHint.setBounds (r.removeFromTop (30));
+        r.removeFromTop (8);
+
+        vst3Title.setBounds (r.removeFromTop (20));
+        vst3Defaults.setBounds (r.removeFromTop (8 + 17 * numDefaultLines));
+        vst3Paths.setBounds (r.removeFromTop (44).translated (0, -1));   // 경계 겹침 — 한 목록처럼
+        r.removeFromTop (8);
+
+        row = r.removeFromTop (26);
+        workerTitle.setBounds (row.removeFromLeft (240));
+        workerCombo.setBounds (row.removeFromLeft (170));
+    }
+
+private:
+    void refresh()
+    {
+        storagePath.setText (AppSettings::get().storageRoot().getFullPathName(),
+                             juce::dontSendNotification);
+        vst3Paths.setText (AppSettings::get().vst3ExtraPaths().joinIntoString ("\n"),
+                           juce::dontSendNotification);
+        workerCombo.setSelectedId (
+            juce::jlimit (0, 6, AppSettings::get().workerCountOverride()) + 1,
+            juce::dontSendNotification);
+    }
+
+    AudioEngine& engine;
+    juce::Label      storageTitle, storageHint, vst3Title, workerTitle;
+    juce::TextEditor storagePath, vst3Defaults, vst3Paths;
+    int              numDefaultLines = 1;
+    juce::TextButton browseButton  { juce::CharPointer_UTF8 ("변경...") };
+    juce::TextButton defaultButton { juce::CharPointer_UTF8 ("기본값") };
+    juce::ComboBox   workerCombo;
+    std::unique_ptr<juce::FileChooser> chooser;
+};
+
+//==============================================================================
+// SettingsWindow — 장치 설정 + 앱 설정을 담는 별도 창
+//==============================================================================
+SettingsWindow::SettingsWindow (AudioEngine& engine, std::function<void()> onCloseCallback)
+    : DocumentWindow (u8 ("설정"), juce::Colours::darkgrey, DocumentWindow::closeButton),
       onClose (std::move (onCloseCallback))
 {
     setUsingNativeTitleBar (true);
 
+    // 장치 셀렉터(위) + 앱 설정 패널(아래) — 컨테이너가 자식 소유
+    struct OwningComponent : juce::Component
+    {
+        ~OwningComponent() override { deleteAllChildren(); }
+    };
+
     auto* sel = new juce::AudioDeviceSelectorComponent (
-        dm, 1, AudioEngine::maxChannels, 1, AudioEngine::maxChannels,
+        engine.getDeviceManager(), 1, AudioEngine::maxChannels, 1, AudioEngine::maxChannels,
         false, false, false, false);
-    sel->setSize (540, 420);
-    setContentOwned (sel, true);
+    auto* panel = new AppSettingsPanel (engine);
+    sel->setBounds   (0, 0,   540, 400);
+    panel->setBounds (0, 404, 540, panel->getHeight());
+
+    auto* content = new OwningComponent();
+    content->addAndMakeVisible (sel);
+    content->addAndMakeVisible (panel);
+    content->setSize (540, 404 + panel->getHeight() + 4);
+    setContentOwned (content, true);
 
     setResizable (true, false);
     centreWithSize (getWidth(), getHeight());
@@ -463,7 +621,7 @@ void MainComponent::openSettings()
     }
 
     settingsWindow = std::make_unique<SettingsWindow> (
-        engine.getDeviceManager(),
+        engine,
         [this] { juce::MessageManager::callAsync ([this] { settingsWindow.reset(); }); });
 }
 

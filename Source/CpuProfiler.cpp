@@ -1,4 +1,5 @@
 #include "CpuProfiler.h"
+#include "AppSettings.h"
 #include "Util.h"
 
 using sr::u8;
@@ -147,8 +148,7 @@ void CpuProfiler::endRun (bool completed)
 
 juce::File CpuProfiler::writeReport()
 {
-    const auto dir = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
-                         .getChildFile ("Superrack").getChildFile ("profiles");
+    const auto dir = AppSettings::get().storageRoot().getChildFile ("profiles");
     dir.createDirectory();
 
     const auto stamp = juce::Time::getCurrentTime().formatted ("%Y%m%d_%H%M%S");

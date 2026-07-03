@@ -1,4 +1,5 @@
 #include "AudioWorkerPool.h"
+#include "AppSettings.h"
 
 #if JUCE_WINDOWS
  #include <windows.h>
@@ -40,6 +41,10 @@ AudioWorkerPool::AudioWorkerPool()
     // 오디오 스레드 1 + 잔여 2코어(GUI/Writer/플러그인 백그라운드/OS) → 나머지가 워커.
     const int cores = juce::SystemStats::getNumPhysicalCpus();
     int numWorkers = juce::jlimit (0, 6, cores - 3);
+
+    // 우선순위: 환경변수(진단) > 앱 설정(0=자동) > 자동.
+    if (const int s = AppSettings::get().workerCountOverride(); s > 0)
+        numWorkers = juce::jlimit (0, 6, s);
 
     if (const auto env = juce::SystemStats::getEnvironmentVariable ("SUPERRACK_WORKERS", "");
         env.isNotEmpty())

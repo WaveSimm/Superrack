@@ -1,11 +1,10 @@
 #include "TakeManager.h"
+#include "AppSettings.h"
 
 //==============================================================================
 juce::File TakeManager::takesRoot()
 {
-    return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
-               .getChildFile ("Superrack")
-               .getChildFile ("takes");
+    return AppSettings::get().storageRoot().getChildFile ("takes");
 }
 
 void TakeManager::ensureFormats() const

@@ -8,12 +8,12 @@
 #include "PluginWindow.h"
 
 //==============================================================================
-/** 오디오 장치 설정을 담는 별도 창 (툴바의 ⚙ 설정 버튼으로 토글).
-    32채널 랙 뷰에서 본 화면 공간을 비우기 위해 장치 패널을 분리한다. */
+/** 오디오 장치 + 앱 설정(저장 위치/VST3 경로/워커 수)을 담는 별도 창
+    (툴바의 ⚙ 설정 버튼으로 토글). */
 class SettingsWindow : public juce::DocumentWindow
 {
 public:
-    SettingsWindow (juce::AudioDeviceManager& dm, std::function<void()> onCloseCallback);
+    SettingsWindow (AudioEngine& engine, std::function<void()> onCloseCallback);
     void closeButtonPressed() override;
 
 private:

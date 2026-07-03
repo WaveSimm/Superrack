@@ -1,4 +1,5 @@
 #include "ChannelStrip.h"
+#include "AppSettings.h"
 #include "Util.h"
 
 using sr::u8;
@@ -116,7 +117,13 @@ bool ChannelStrip::findByFallback (const juce::String& originalPath, int uid,
                                    juce::PluginDescription& out)
 {
     juce::VST3PluginFormat fmt;
-    const auto locations = fmt.getDefaultLocationsToSearch();
+    auto locations = fmt.getDefaultLocationsToSearch();
+
+    // 사용자 지정 VST3 추가 경로 (앱 설정) — 표준 위치보다 먼저 검색.
+    const auto extras = AppSettings::get().vst3ExtraPaths();
+    for (int i = extras.size(); --i >= 0;)
+        if (juce::File dir (extras[i]); dir.isDirectory())
+            locations.add (dir, 0);
 
     auto uidMatches = [uid] (const juce::PluginDescription& d)
     {

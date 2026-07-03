@@ -1,8 +1,8 @@
 # ASIO 다채널 VST3 인서트 프로세서 (GUI) — 1:1 라우팅 + Dry 멀티트랙 레코더
 
-> 상태: 설계 (Plan) — 1:1 채널 라우팅 / Dry 전용 녹음으로 확정
+> **상태: 역사 문서** (설계 시점 원문, 2026-06-29) — 이후 구현·개정 사항은 반영되지 않음.
+> **현행 기준 문서**: [`docs/02-design/DESIGN.md`](docs/02-design/DESIGN.md) (모듈 계약·구현 노트) · [`docs/BACKLOG.md`](docs/BACKLOG.md)
 > 워크플로우: Claude Code CLI(개발 도구) · Bkit/PDCA
-> 개정일: 2026-06-29
 
 ---
 

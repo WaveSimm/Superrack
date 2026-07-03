@@ -193,6 +193,26 @@ void TakeManager::commitRecording (const juce::File& takeDir, const juce::File& 
         tmpOut.moveFileTo (dstFile);
     }
 
+    // 채널 수가 줄었으면 이번 녹음에 없는 잔여 스템을 .prev 로 이동 —
+    // 현재 상태(새 채널 구성)와 undo 상태(이전 구성)의 일관성 유지.
+    {
+        juce::Array<juce::File> existing;
+        takeDir.findChildFiles (existing, juce::File::findFiles, false, "ch*_dry.wav");
+        for (auto& f : existing)
+        {
+            bool inNewRecording = false;
+            for (auto& ns : newStems)
+                if (ns.getFileName() == f.getFileName()) { inNewRecording = true; break; }
+
+            if (! inNewRecording)
+            {
+                const auto prev = takeDir.getChildFile (f.getFileName() + ".prev");
+                prev.deleteFile();
+                f.moveFileTo (prev);
+            }
+        }
+    }
+
     // 메타데이터도 커밋 직전 상태를 .prev 로 보존 (스템과 세트로 스왑됨)
     for (const auto* metaName : { "timeline.json", "session.json" })
     {

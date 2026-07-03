@@ -159,9 +159,19 @@ SettingsWindow::SettingsWindow (AudioEngine& engine, std::function<void()> onClo
 {
     setUsingNativeTitleBar (true);
 
-    // 장치 셀렉터(위) + 앱 설정 패널(아래) — 컨테이너가 자식 소유
+    // 장치 셀렉터(위, 가변) + 앱 설정 패널(아래 고정) — 컨테이너가 자식 소유 + 리레이아웃
     struct OwningComponent : juce::Component
     {
+        juce::Component* top = nullptr;
+        juce::Component* bottom = nullptr;
+        int bottomHeight = 0;
+
+        void resized() override
+        {
+            auto r = getLocalBounds();
+            if (bottom != nullptr) bottom->setBounds (r.removeFromBottom (bottomHeight));
+            if (top != nullptr)    top->setBounds (r);
+        }
         ~OwningComponent() override { deleteAllChildren(); }
     };
 
@@ -169,13 +179,14 @@ SettingsWindow::SettingsWindow (AudioEngine& engine, std::function<void()> onClo
         engine.getDeviceManager(), 1, AudioEngine::maxChannels, 1, AudioEngine::maxChannels,
         false, false, false, false);
     auto* panel = new AppSettingsPanel (engine);
-    sel->setBounds   (0, 0,   540, 400);
-    panel->setBounds (0, 404, 540, panel->getHeight());
 
     auto* content = new OwningComponent();
+    content->top = sel;
+    content->bottom = panel;
+    content->bottomHeight = panel->getHeight();
     content->addAndMakeVisible (sel);
     content->addAndMakeVisible (panel);
-    content->setSize (540, 404 + panel->getHeight() + 4);
+    content->setSize (540, 404 + panel->getHeight());
     setContentOwned (content, true);
 
     setResizable (true, false);
@@ -674,11 +685,14 @@ void MainComponent::updateTransportUI()
                              juce::dontSendNotification);
     else
     {
+        juce::String txt;
         const auto dir = engine.getLastRecordDir();
-        if (dir != juce::File() && dir.isDirectory())
-            recordLabel.setText (u8 ("테이크: ") + dir.getFileName(), juce::dontSendNotification);
-        else
-            recordLabel.setText (u8 ("녹음 없음"), juce::dontSendNotification);
+        txt = (dir != juce::File() && dir.isDirectory()) ? u8 ("테이크: ") + dir.getFileName()
+                                                         : u8 ("녹음 없음");
+        // 재생 스트리밍 언더런(디스크 지연) 표면화 — 있으면 원인 추적 신호
+        if (const int ur = engine.getPlayerUnderruns(); ply && ur > 0)
+            txt << u8 ("  ·  재생 언더런 ") << ur;
+        recordLabel.setText (txt, juce::dontSendNotification);
     }
 }
 

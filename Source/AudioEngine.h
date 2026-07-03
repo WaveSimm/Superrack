@@ -117,6 +117,8 @@ public:
     /** 오디오 CPU 사용률(0~1)과 장치 xrun(드롭아웃) 카운트 — GUI 표면화. */
     double getCpuUsage()    const { return deviceManager.getCpuUsage(); }
     int    getDeviceXRuns() const noexcept { return deviceManager.getXRunCount(); }
+    /** 재생 스트리밍 언더런(디스크 지연으로 무음 낸 블록 수) — GUI 표면화. */
+    int    getPlayerUnderruns() const noexcept { return player.getUnderrunCount(); }
 
     //==========================================================================
     // ── DSP 부하 실측 + 합성 부하 프로파일링 (Phase 4) ──────────────────────

@@ -220,6 +220,20 @@ static void testTakeManager (const juce::File& sandbox)
     EXPECT (readWav (takeDir.getChildFile ("ch01_dry.wav")) == merged);
     EXPECT (mgr.readSession (takeDir).getProperty ("marker", "") == "commit2");
 
+    // ── 채널 수 감소 커밋: 잔여 스템이 현재 상태에 남지 않고 undo 로 복원 ──
+    {
+        const auto rectmpN = sandbox.getChildFile ("rectmpN");
+        rectmpN.deleteRecursively();
+        EXPECT (writeWav (rectmpN.getChildFile ("ch01_dry.wav"), take2, 48000.0));   // 1채널만
+        mgr.commitRecording (takeDir, rectmpN, 0, env, snap2);
+        EXPECT (takeDir.getChildFile ("ch01_dry.wav").existsAsFile());
+        EXPECT (! takeDir.getChildFile ("ch02_dry.wav").existsAsFile());             // 잔여 스템 정리
+        EXPECT (mgr.swapUndoState (takeDir));                                        // undo → 2채널 복원
+        EXPECT (takeDir.getChildFile ("ch02_dry.wav").existsAsFile());
+        EXPECT (mgr.swapUndoState (takeDir));                                        // redo → 다시 1채널
+        EXPECT (! takeDir.getChildFile ("ch02_dry.wav").existsAsFile());
+    }
+
     // ── 첫 녹음 undo → 빈 테이크, redo → 복원 ──
     const auto take2Dir = mgr.createTake (env, juce::var());
     const auto rectmp3 = sandbox.getChildFile ("rectmp3");

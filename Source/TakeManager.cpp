@@ -77,7 +77,18 @@ TakeManager::TakeInfo TakeManager::readTake (const juce::File& dir) const
         t.env.channels    = (int) v.getProperty ("channels", 0);
         t.lengthSamples   = (juce::int64) (double) v.getProperty ("lengthSamples", 0.0);
         if (auto* h = v.getProperty ("history", {}).getArray())
+        {
             t.historyCount = h->size();
+            for (auto& e : *h)
+            {
+                HistoryEntry he;
+                he.op          = e.getProperty ("op", "").toString();
+                he.startSample = (juce::int64) (double) e.getProperty ("startSample", 0.0);
+                he.endSample   = (juce::int64) (double) e.getProperty ("endSample", 0.0);
+                he.at          = e.getProperty ("at", "").toString();
+                t.history.add (he);
+            }
+        }
     }
     return t;
 }
@@ -97,9 +108,11 @@ juce::Array<TakeManager::TakeInfo> TakeManager::listTakes() const
         if (timelineFile (d).existsAsFile())
             takes.add (readTake (d));
 
-    // 최신순 (id = 타임스탬프 문자열이라 역순 정렬)
+    // 마지막 작업(updatedAt) 최신순 — 옛 테이크에 재녹음하면 위로 올라온다.
+    // ISO8601 문자열 = 사전순 비교. 동률(구형 데이터)은 id(생성 시각) 역순.
     std::sort (takes.begin(), takes.end(),
-               [] (const TakeInfo& a, const TakeInfo& b) { return a.id > b.id; });
+               [] (const TakeInfo& a, const TakeInfo& b)
+               { return a.updatedAt != b.updatedAt ? a.updatedAt > b.updatedAt : a.id > b.id; });
     return takes;
 }
 

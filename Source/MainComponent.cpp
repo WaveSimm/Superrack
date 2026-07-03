@@ -355,6 +355,7 @@ MainComponent::MainComponent()
         updateTransportUI();
     };
     addAndMakeVisible (positionSlider);
+    addAndMakeVisible (punchOverlay);   // 슬라이더 뒤에 추가 = 위에 그려짐 (마우스 통과)
 
     throughChainToggle.setToggleState (engine.isPlaybackThroughChain(), juce::dontSendNotification);
     throughChainToggle.setColour (juce::ToggleButton::textColourId, juce::Colours::white);
@@ -518,7 +519,9 @@ void MainComponent::resized()
     stopButton.setBounds   (tr.removeFromLeft (38));  tr.removeFromLeft (10);
     timeLabel.setBounds    (tr.removeFromLeft (150)); tr.removeFromLeft (8);
     throughChainToggle.setBounds (tr.removeFromRight (170));  tr.removeFromRight (8);
-    positionSlider.setBounds (tr.reduced (0, 4));
+    const auto sliderArea = tr.reduced (0, 4);
+    positionSlider.setBounds (sliderArea);
+    punchOverlay.setBounds (sliderArea);
 
     area.removeFromTop (6);
 
@@ -716,7 +719,10 @@ void MainComponent::refreshTakes()
 
         juce::String label;
         label << when << "  (" << t.env.channels << "ch, "
-              << juce::String (t.env.sampleRate / 1000.0, 1) << "k, " << fmtTime (t.lengthSeconds()) << ")";
+              << juce::String (t.env.sampleRate / 1000.0, 1) << "k, " << fmtTime (t.lengthSeconds());
+        if (t.historyCount > 0)
+            label << u8 (" · 녹음 ") << t.historyCount << u8 ("회");
+        label << ")";
         takeSelector.addItem (label, i + 1);
 
         if (t.dir == cur)
@@ -729,6 +735,18 @@ void MainComponent::refreshTakes()
     undoButton.setButtonText (! takeHasUndo || engine.undoIsRestore()
                                   ? u8 ("\xe2\x9f\xb2 녹음 복구")      // ⟲ 직전 상태로
                                   : u8 ("\xe2\x9f\xb3 복구 취소"));    // ⟳ 다시 앞으로
+
+    // 진행바 오버레이 — 현재 테이크의 녹음/펀치 구간 (테이크 변경 시에만 파일 조회)
+    {
+        const auto info = engine.getCurrentTakeInfo();
+        const double sr = info.env.sampleRate > 0.0 ? info.env.sampleRate : 48000.0;
+
+        juce::Array<PunchStripOverlay::Range> ranges;
+        for (const auto& h : info.history)
+            ranges.add ({ (double) h.startSample / sr, (double) h.endSample / sr });
+
+        punchOverlay.setRanges (std::move (ranges), info.lengthSeconds());
+    }
 }
 
 //==============================================================================

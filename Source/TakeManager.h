@@ -39,6 +39,7 @@ public:
         TakeEnv      env;
         juce::int64  lengthSamples = 0;
         int          historyCount = 0;
+        juce::Array<HistoryEntry> history;   // 각 record/punch 구간 (UI 시각화용)
         bool isValid() const { return dir.isDirectory(); }
         double lengthSeconds() const { return env.sampleRate > 0.0 ? (double) lengthSamples / env.sampleRate : 0.0; }
     };

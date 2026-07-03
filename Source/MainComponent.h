@@ -22,6 +22,49 @@ private:
 };
 
 //==============================================================================
+/** 진행바 위 녹음/펀치 구간 오버레이 — 마우스 통과, 페인트 전용 (백로그 E).
+    각 record/punch 이력 구간을 하단 밴드로 표시, 마지막 커밋은 주황 강조. */
+class PunchStripOverlay : public juce::Component
+{
+public:
+    PunchStripOverlay() { setInterceptsMouseClicks (false, false); }
+
+    struct Range { double startSec = 0.0, endSec = 0.0; };
+
+    void setRanges (juce::Array<Range> r, double totalSeconds)
+    {
+        ranges = std::move (r);
+        totalSec = totalSeconds;
+        repaint();
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        if (totalSec <= 0.0 || ranges.isEmpty())
+            return;
+
+        const auto area = getLocalBounds().toFloat();
+        const float y = area.getBottom() - 5.0f, h = 4.0f;
+
+        for (int i = 0; i < ranges.size(); ++i)
+        {
+            const auto& r = ranges.getReference (i);
+            const auto x1 = area.getX() + (float) (juce::jlimit (0.0, totalSec, r.startSec) / totalSec) * area.getWidth();
+            const auto x2 = area.getX() + (float) (juce::jlimit (0.0, totalSec, r.endSec)   / totalSec) * area.getWidth();
+
+            const bool isLast = (i == ranges.size() - 1);
+            g.setColour (isLast ? juce::Colours::orange.withAlpha (0.90f)
+                                : juce::Colours::grey.withAlpha (0.40f));
+            g.fillRoundedRectangle (x1, y, juce::jmax (2.0f, x2 - x1), h, 2.0f);
+        }
+    }
+
+private:
+    juce::Array<Range> ranges;
+    double totalSec = 0.0;
+};
+
+//==============================================================================
 /** 메인 뷰: 얇은 툴바(설정/레이턴시/녹음) + 세로 스크롤 채널 랙. */
 class MainComponent : public juce::Component,
                       private juce::Timer
@@ -66,6 +109,7 @@ private:
     juce::TextButton   stopButton;
     juce::Label        timeLabel;
     juce::Slider       positionSlider;
+    PunchStripOverlay  punchOverlay;      // 진행바 위 녹음/펀치 구간 밴드
     juce::ToggleButton throughChainToggle { juce::CharPointer_UTF8 ("재생 시 플러그인 통과") };
     juce::Label        recordLabel;        // 녹음 상태(폴더/드롭)
     bool               seeking = false;

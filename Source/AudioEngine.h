@@ -100,6 +100,8 @@ public:
     void newTake();
     juce::Array<TakeManager::TakeInfo> listTakes() { return takeMgr.listTakes(); }
     juce::File getCurrentTakeDir() const { return currentTakeDir; }
+    /** 현재 테이크 메타(이력 포함) — UI 시각화용, 테이크 변경 시에만 호출(파일 읽음). */
+    TakeManager::TakeInfo getCurrentTakeInfo() const { return takeMgr.readTake (currentTakeDir); }
     /** 과거 테이크를 현재로 로드 → 세션 자동복원. 환경 불일치 시 warning 채움. */
     void loadTake (const juce::File& takeDir, juce::String& warning);
     /** 테이크 폴더 삭제(영구). 현재 테이크면 정지·언로드 후 다른 테이크로 전환. */

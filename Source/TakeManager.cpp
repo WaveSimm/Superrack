@@ -186,9 +186,22 @@ void TakeManager::commitRecording (const juce::File& takeDir, const juce::File& 
         newLen   = juce::jmax (newLen, thisNew);
         finalLen = juce::jmax (finalLen, written + thisNew);
 
-        // 스왑: 기존 삭제 → tmp 를 정식 이름으로
-        dstFile.deleteFile();
+        // 스왑: 기존을 .prev 로 보존(undo 1단계) → tmp 를 정식 이름으로
+        const auto prevFile = takeDir.getChildFile (name + ".prev");
+        prevFile.deleteFile();
+        if (dstFile.existsAsFile())
+            dstFile.moveFileTo (prevFile);
         tmpOut.moveFileTo (dstFile);
+    }
+
+    // 메타데이터도 커밋 직전 상태를 .prev 로 보존 (스템과 세트로 스왑됨)
+    for (const auto* metaName : { "timeline.json", "session.json" })
+    {
+        const auto cur  = takeDir.getChildFile (metaName);
+        const auto prev = takeDir.getChildFile (juce::String (metaName) + ".prev");
+        prev.deleteFile();
+        if (cur.existsAsFile())
+            cur.copyFileTo (prev);   // timeline 은 아래에서 이어서 갱신하므로 copy
     }
 
     // timeline.json 갱신: 이력 append + 길이/채널/SR
@@ -223,4 +236,64 @@ void TakeManager::commitRecording (const juce::File& takeDir, const juce::File& 
 
     // 세션 스냅샷 갱신(이번 녹음 시점 구성)
     takeDir.getChildFile ("session.json").replaceWithText (juce::JSON::toString (sessionSnapshot));
+}
+
+//==============================================================================
+// 녹음 undo/redo — 커밋 직전 상태(*.prev)와 현재 상태를 렌임으로 통째 스왑.
+
+static juce::StringArray undoBaseNames (const juce::File& takeDir)
+{
+    // 스왑 대상 = 스템 + 메타데이터. 현재/보존 어느 쪽에만 있는 파일도 포함
+    // (첫 녹음 undo: 스템이 .prev 쪽에만 생기는 경우 등).
+    juce::StringArray names;
+    juce::Array<juce::File> files;
+    takeDir.findChildFiles (files, juce::File::findFiles, false, "ch*_dry.wav*");
+    for (auto& f : files)
+    {
+        auto n = f.getFileName();
+        if (n.endsWith (".prev"))
+            n = n.dropLastCharacters (5);
+        if (n.endsWith ("_dry.wav"))
+            names.addIfNotAlreadyThere (n);
+    }
+    names.add ("timeline.json");
+    names.add ("session.json");
+    return names;
+}
+
+bool TakeManager::hasUndoState (const juce::File& takeDir) const
+{
+    return takeDir.getChildFile ("timeline.json.prev").existsAsFile();
+}
+
+bool TakeManager::swapUndoState (const juce::File& takeDir) const
+{
+    if (! hasUndoState (takeDir))
+        return false;
+
+    bool ok = true;
+    for (const auto& name : undoBaseNames (takeDir))
+    {
+        const auto cur  = takeDir.getChildFile (name);
+        const auto prev = takeDir.getChildFile (name + ".prev");
+        const auto tmp  = takeDir.getChildFile (name + ".swp");
+
+        const bool hasCur = cur.existsAsFile(), hasPrev = prev.existsAsFile();
+        if (hasCur && hasPrev)
+        {
+            tmp.deleteFile();
+            ok = cur.moveFileTo (tmp) && prev.moveFileTo (cur) && tmp.moveFileTo (prev) && ok;
+        }
+        else if (hasCur)   ok = cur.moveFileTo (prev) && ok;   // 현재에만 → 보존 쪽으로
+        else if (hasPrev)  ok = prev.moveFileTo (cur) && ok;   // 보존에만 → 현재 쪽으로
+    }
+    return ok;
+}
+
+bool TakeManager::isCurrentNewer (const juce::File& takeDir) const
+{
+    const auto curAt  = readTimeline (takeDir).getProperty ("updatedAt", "").toString();
+    const auto prevAt = juce::JSON::parse (takeDir.getChildFile ("timeline.json.prev"))
+                            .getProperty ("updatedAt", "").toString();
+    return curAt >= prevAt;   // ISO8601 문자열 = 사전순 비교 가능
 }

@@ -253,6 +253,18 @@ MainComponent::MainComponent()
     };
     addAndMakeVisible (deleteTakeButton);
 
+    // 녹음 undo/redo — 커밋 직전 상태와 스왑 (실수한 녹음 즉시 복구)
+    undoButton.onClick = [this]
+    {
+        juce::String err;
+        if (! engine.undoRecording (err))
+            juce::NativeMessageBox::showMessageBoxAsync (
+                juce::MessageBoxIconType::WarningIcon, u8 ("녹음 복구"), err);
+        rebuildChannelRows();   // 세션 스냅샷도 스왑됨 — 체인 UI 반영
+        updateTransportUI();
+    };
+    addAndMakeVisible (undoButton);
+
     // 테이크 목록/현재 테이크 변화 시 콤보 갱신 (메시지 스레드로 안전하게)
     engine.onTakesChanged = [this]
     {
@@ -346,6 +358,8 @@ void MainComponent::resized()
     newTakeButton.setBounds (takeRow.removeFromRight (110));
     takeRow.removeFromRight (6);
     deleteTakeButton.setBounds (takeRow.removeFromRight (60));
+    takeRow.removeFromRight (6);
+    undoButton.setBounds (takeRow.removeFromRight (110));
     takeRow.removeFromRight (8);
     takeSelector.setBounds (takeRow);
 
@@ -494,6 +508,8 @@ void MainComponent::updateTransportUI()
     playButton.setEnabled (! rec);
     recordButton.setEnabled (! ply);
 
+    undoButton.setEnabled (takeHasUndo && ! rec && ! ply);
+
     // 녹음 상태 라벨
     if (rec)
         recordLabel.setText (u8 ("녹음 중  드롭: ") + juce::String (engine.getRecordXruns()),
@@ -535,6 +551,12 @@ void MainComponent::refreshTakes()
             selId = i + 1;
     }
     takeSelector.setSelectedId (selId, juce::dontSendNotification);
+
+    // 녹음 undo/redo 버튼 — 보존 상태 유무 + 방향 캐시 (테이크 변경 시에만 파일 조회)
+    takeHasUndo = engine.canUndoRecording();
+    undoButton.setButtonText (! takeHasUndo || engine.undoIsRestore()
+                                  ? u8 ("\xe2\x9f\xb2 녹음 복구")      // ⟲ 직전 상태로
+                                  : u8 ("\xe2\x9f\xb3 복구 취소"));    // ⟳ 다시 앞으로
 }
 
 //==============================================================================

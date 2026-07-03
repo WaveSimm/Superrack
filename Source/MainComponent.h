@@ -76,6 +76,8 @@ private:
     juce::ComboBox   takeSelector;
     juce::TextButton newTakeButton    { juce::CharPointer_UTF8 ("\xef\xbc\x8b 새 테이크") };
     juce::TextButton deleteTakeButton { juce::CharPointer_UTF8 ("삭제") };
+    juce::TextButton undoButton;         // 녹음 undo/redo — 라벨은 상태에 따라 갱신
+    bool             takeHasUndo = false;   // refreshTakes 에서 캐시 (매 틱 파일 조회 방지)
     juce::Array<juce::File> takePaths;   // combo id-1 → 폴더
     void refreshTakes();
 

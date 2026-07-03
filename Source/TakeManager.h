@@ -58,10 +58,24 @@ public:
     juce::var readSession (const juce::File& takeDir) const;
 
     /** recTmp 의 새 녹음을 takeDir 에 커밋(펀치: 기존 [0..punchSamples) + 새 녹음).
-        트랙별 파일 제자리 갱신 + timeline.json(이력·환경) 갱신 + session.json 스냅샷 저장. */
+        트랙별 파일 제자리 갱신 + timeline.json(이력·환경) 갱신 + session.json 스냅샷 저장.
+        커밋 직전 상태는 *.prev 로 보존된다(1단계 undo — swapUndoState). */
     void commitRecording (const juce::File& takeDir, const juce::File& recTmp,
                           juce::int64 punchSamples, const TakeEnv& env,
                           const juce::var& sessionSnapshot);
+
+    //==========================================================================
+    // ── 녹음 undo/redo (1단계, 커밋 직전 상태와 스왑) ─────────────────────────
+    /** 직전 커밋 상태(*.prev)가 보존돼 있는가. */
+    bool hasUndoState (const juce::File& takeDir) const;
+
+    /** 현재 ↔ 직전 상태를 통째로 스왑(렌임 — 오디오 데이터 복사 없음).
+        같은 호출이 undo/redo 토글이 된다. 성공 시 true.
+        주의: 테이크 파일을 연 리더(재생기)는 호출 전에 해제할 것. */
+    bool swapUndoState (const juce::File& takeDir) const;
+
+    /** 현재 상태가 보존 상태보다 최신인가 — true 면 "실행취소", false 면 "다시실행". */
+    bool isCurrentNewer (const juce::File& takeDir) const;
 
 private:
     mutable juce::AudioFormatManager formatMgr;

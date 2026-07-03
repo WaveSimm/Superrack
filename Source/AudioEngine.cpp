@@ -173,6 +173,42 @@ void AudioEngine::loadTake (const juce::File& takeDir, juce::String& warning)
         onTakesChanged();
 }
 
+bool AudioEngine::undoRecording (juce::String& error)
+{
+    if (! canUndoRecording())
+    {
+        error = u8 ("복구할 이전 녹음 상태가 없습니다.");
+        return false;
+    }
+
+    transportStop();
+    player.unload();   // 테이크 파일을 연 리더 해제 (렌임 전 필수)
+
+    if (! takeMgr.swapUndoState (currentTakeDir))
+    {
+        error = u8 ("복구 실패: 테이크 파일을 교체할 수 없습니다.");
+        refreshTakeLength();
+        return false;
+    }
+
+    refreshTakeLength();
+    playheadSeconds = juce::jmin (playheadSeconds, currentTakeLengthSeconds);
+
+    if (auto* dev = deviceManager.getCurrentAudioDevice(); dev != nullptr)
+    {
+        juce::String e;
+        if (player.load (currentTakeDir, dev->getCurrentBufferSizeSamples(),
+                         dev->getCurrentSampleRate(), e))
+            player.setPosition ((juce::int64) (playheadSeconds * player.getSampleRate()));
+        else
+            player.unload();   // 빈 상태로 복구된 경우(첫 녹음 undo) — 정상
+    }
+
+    if (onTakesChanged != nullptr)
+        onTakesChanged();
+    return true;
+}
+
 void AudioEngine::deleteTake (const juce::File& takeDir)
 {
     if (! takeDir.isDirectory())

@@ -107,6 +107,13 @@ public:
     /** 테이크 목록/현재 테이크가 바뀌면 호출(메시지 스레드). */
     std::function<void()> onTakesChanged;
 
+    // ── 녹음 undo/redo (1단계 — 커밋 직전 상태로 복구/재적용) ────────────────
+    bool canUndoRecording() const { return currentTakeDir.isDirectory() && takeMgr.hasUndoState (currentTakeDir); }
+    /** true = 다음 동작이 "실행취소"(직전 복구), false = "다시실행". */
+    bool undoIsRestore() const { return takeMgr.isCurrentNewer (currentTakeDir); }
+    /** 현재 테이크를 커밋 직전 상태와 스왑(정지 후). 실패 시 error 채우고 false. */
+    bool undoRecording (juce::String& error);
+
     /** 오디오 CPU 사용률(0~1)과 장치 xrun(드롭아웃) 카운트 — GUI 표면화. */
     double getCpuUsage()    const { return deviceManager.getCpuUsage(); }
     int    getDeviceXRuns() const noexcept { return deviceManager.getXRunCount(); }

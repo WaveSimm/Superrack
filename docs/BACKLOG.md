@@ -63,4 +63,4 @@ P0~P2 완료(실기), P3 견고화 + 통합 타임라인 녹음/재생 + 테이�
 ### G. 하우스키핑  [P3]
 - `git init` + `build/` `.gitignore`(JUCE FetchContent 소스 3천+ 파일 제외).
 - 과거 테스트로 생긴 `rec/`·`*_asm` 잔여 폴더 정리(신규 모델은 `takes/`·`.rectmp/` 사용).
-- QA: L1~L5 테스트 부재 → 핵심 경로(녹음/펀치/커밋/재생/테이크전환) 테스트 추가.
+- ~~QA: L1~L5 테스트 부재~~ — **L1 완료(2026-07-03)**: `SuperrackTests` 헤드리스 타깃(71 어서션, 녹음 FIFO 무손실/커밋·펀치·undo/재생 비트일치·시크·리샘플/병렬==직렬/설정·직렬화). 샌드박스 격리, 3회 반복 무플레이크. → [`05-qa/asio-vst3-host.qa-report.md`](05-qa/asio-vst3-host.qa-report.md). 잔여: 커밋 전 테스트 실행 습관/훅, VST3 실로딩·GUI 는 실기 영역.

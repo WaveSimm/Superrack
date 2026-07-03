@@ -68,3 +68,35 @@ target_link_libraries(Superrack PRIVATE
     PUBLIC
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags)
+
+# ── L1 테스트 타깃 (QA Phase, BACKLOG G) — 헤드리스 콘솔, ASIO/플러그인 불필요 ──
+juce_add_console_app(SuperrackTests PRODUCT_NAME "SuperrackTests")
+
+target_sources(SuperrackTests PRIVATE
+    Tests/TestMain.cpp
+    Source/AppSettings.cpp
+    Source/ChannelStrip.cpp
+    Source/MultitrackRecorder.cpp
+    Source/TimelinePlayer.cpp
+    Source/TakeManager.cpp
+    Source/AudioWorkerPool.cpp)
+
+target_compile_features(SuperrackTests PRIVATE cxx_std_17)
+target_include_directories(SuperrackTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/farbot/include")
+
+if(MSVC)
+    target_compile_options(SuperrackTests PRIVATE /utf-8)
+endif()
+
+target_compile_definitions(SuperrackTests PRIVATE
+    JUCE_PLUGINHOST_VST3=1
+    JUCE_USE_CURL=0
+    JUCE_WEB_BROWSER=0
+    JUCE_STRICT_REFCOUNTEDPOINTER=1)
+
+target_link_libraries(SuperrackTests PRIVATE
+    juce::juce_audio_processors
+    juce::juce_audio_formats
+    juce::juce_events
+    PUBLIC
+    juce::juce_recommended_config_flags)

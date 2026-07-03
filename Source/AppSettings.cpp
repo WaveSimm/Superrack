@@ -15,6 +15,11 @@ AppSettings::AppSettings()
 
 juce::File AppSettings::settingsFile()
 {
+    // SUPERRACK_APPDATA: 설정 폴더 오버라이드 (테스트 격리·포터블 설치용)
+    if (const auto dir = juce::SystemStats::getEnvironmentVariable ("SUPERRACK_APPDATA", "");
+        dir.isNotEmpty())
+        return juce::File (dir).getChildFile ("app-settings.json");
+
     return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
                .getChildFile ("Superrack").getChildFile ("app-settings.json");
 }

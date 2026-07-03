@@ -113,7 +113,8 @@
 
 ## 5.8 구현 노트 (D2 + A2 — wait-free 체인 스왑 & 채널 병렬 DSP, 2026-07-02)
 - **D2 체인 스왑** (`ChannelStrip`, farbot `RealtimeObject<NodeList, nonRealtimeMutatable>` — ThirdParty/farbot 벤더링, MIT, **fifo 모듈 사용 금지**): 메시지 스레드가 원본 `editList` 수정 후 `publishChain()`(= `nonRealtimeReplace`) 복사 스왑. RT 획득은 wait-free(ScopedAccess), 편집 중에도 dry 갭 없이 직전 체인 유지. 구버전 벡터·노드(shared_ptr) 해제는 항상 메시지 스레드. Bypass 는 공유 Node atomic — 스왑 불필요. 기존 reconfiguring 플래그+CallbackFence 가드는 ChannelStrip 에서 제거(recorder/player 에는 유지).
-- **A2 병렬 DSP** (`Source/AudioWorkerPool.*`): 채널=잡 fork-join. 콜백이 잡 배열 게시 → 티켓 카운터(fetch_add) 클레임으로 워커+오디오 스레드 분담 → jobsDone 스핀 조인. 게이트(GATE_CLOSED=2^40) 덕에 블록 경계에서 늦게 깬 워커의 스테일 클레임은 idx≥count 로 자연 폐기 — 이중 실행 불가. 워커 = `TIME_CRITICAL`+MMCSS "Pro Audio"(프로세스 클래스 불변), 대기 = 짧은 spin→이벤트(2ms 타임아웃 폴백). 워커 수 = 물리코어−2.
+- **A2 병렬 DSP** (`Source/AudioWorkerPool.*`): 채널=잡 fork-join. 콜백이 잡 배열 게시 → 티켓 카운터(fetch_add) 클레임으로 워커+오디오 스레드 분담 → jobsDone 스핀 조인. 게이트(GATE_CLOSED=2^40) 덕에 블록 경계에서 늦게 깬 워커의 스테일 클레임은 idx≥count 로 자연 폐기 — 이중 실행 불가. 대기 = 짧은 spin→이벤트(2ms 타임아웃 폴백).
+- **A3 개정(2026-07-03, 실측)**: 워커 = `TIME_CRITICAL` **만**(MMCSS 등록 시 예약 윈도 스로틀 ~2.3ms 스톨), 워커 수 = **물리코어−3**(잔여 1코어면 저순위 스레드 굶음 → 10~28ms 실행 스톨). 오버라이드 `SUPERRACK_WORKERS`/`SUPERRACK_MMCSS=1`. 잡별 {클레임·종료·실행 스레드} 스파이크 계측 상시 탑재(예산 초과 최악 블록 seqlock 스냅샷 → 프로파일 리포트 "스파이크 상세"). → `measurements/cpu-profile-parallel-2026-07-03.md`
 - 적용 경로: 라이브 모니터/녹음, 재생(체인 통과 시), 합성 부하(채널별 스크래치로 분리). GUI 토글 "병렬 DSP ×N"(off=직렬, 프로파일 비교용).
 - 안전성 논거: 한 잡=한 스트립(스트립 내부 버퍼 스레드 격리), 클레임:완료 1:1 이라 조인 후 워커가 잡 실행 중일 수 없음 → 다음 블록 상태 변경과 격리. 잡 배열 가시성은 게이트 release-store ↔ 클레임 acquire RMW 페어링.
 

@@ -137,6 +137,11 @@ public:
     bool isParallelDsp() const noexcept   { return workerPool.isEnabled(); }
     int  getNumDspWorkers() const noexcept { return workerPool.getNumWorkers(); }
 
+    // ── A3 스파이크 계측 (프로파일러가 사용, 메시지 스레드) ──────────────────
+    void resetDspSpikeCapture() noexcept { workerPool.resetSpikeCapture(); }
+    bool readDspSpikeSnapshot (AudioWorkerPool::SpikeSnapshot& out) const noexcept
+        { return workerPool.readSpikeSnapshot (out); }
+
     //==========================================================================
     // ── 세션 저장/로드 (Phase 3) ────────────────────────────────────────────
     /** 현재 채널 체인+게인을 %APPDATA%/Superrack/session.json 에 자동 저장. */

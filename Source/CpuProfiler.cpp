@@ -83,6 +83,7 @@ void CpuProfiler::timerCallback()
         measuring   = true;
         phaseStart  = juce::Time::getMillisecondCounter();
         engine.resetDspLoadStats();
+        engine.resetDspSpikeCapture();   // A3: 단계별 최악 블록 스냅샷 새로 수집
         xrunBase    = engine.getDeviceXRuns();
         overrunBase = engine.getDspOverruns();
         return;
@@ -103,6 +104,7 @@ void CpuProfiler::timerCallback()
     r.peakLoad = engine.getDspLoadPeak();
     r.xruns    = engine.getDeviceXRuns() - xrunBase;
     r.overruns = engine.getDspOverruns() - overrunBase;
+    r.hasSpike = engine.readDspSpikeSnapshot (r.spike);
     report.steps.add (r);
 
     if (++stepIndex >= stepChannels.size())
@@ -166,6 +168,11 @@ juce::File CpuProfiler::writeReport()
            << " ms)\n";
     }
     md << u8 ("- 물리 활성 채널: ") << engine.getActiveChannelCount() << "\n";
+    md << u8 ("- 병렬 DSP: ")
+       << (engine.isParallelDsp() && engine.getNumDspWorkers() > 0
+               ? u8 ("ON (워커 ") + juce::String (engine.getNumDspWorkers()) + ")"
+               : u8 ("OFF (직렬)"))
+       << "\n";
 
     // 측정에 쓰인 체인 (Ch1 기준 — 전 합성 채널에 복제)
     md << u8 ("- 체인(Ch1, 전 채널 복제): ");
@@ -196,6 +203,53 @@ juce::File CpuProfiler::writeReport()
            << " | " << s.overruns
            << " | " << s.xruns
            << " | " << (s.isStable() ? u8 ("안정") : u8 ("**불안정**")) << " |\n";
+
+    // A3: 단계별 최악 스파이크 블록의 잡 타임라인 — 늦은 시작 = 클레임/웨이크 지연,
+    // 긴 실행 = 실행 중 스톨(프리엠션 등). 원인 분리용.
+    bool anySpike = false;
+    for (const auto& s : report.steps)
+        anySpike = anySpike || s.hasSpike;
+
+    if (anySpike)
+    {
+        md << "\n" << u8 ("## 스파이크 상세 (단계별 최악 예산초과 블록)\n\n");
+        for (const auto& s : report.steps)
+        {
+            if (! s.hasSpike)
+                continue;
+
+            const auto& sp = s.spike;
+            md << "- **" << s.channels << u8 ("ch** — 블록 ")
+               << juce::String (sp.totalUs / 1000.0, 2) << u8 (" ms · 잡 ") << sp.numJobs
+               << u8 (" · ") << (sp.parallel ? u8 ("병렬") : u8 ("직렬")) << "\n";
+
+            // 지배 잡(가장 늦게 끝난 것) + 시작 지연/실행 시간 분해
+            const int n = juce::jmin (sp.numJobs, AudioWorkerPool::maxSnapshotJobs);
+            int last = -1;
+            juce::uint32 maxOtherExecUs = 0, maxStartUs = 0;
+            for (int i = 0; i < n; ++i)
+            {
+                if (last < 0 || sp.stats[i].endUs > sp.stats[last].endUs)
+                    last = i;
+                maxStartUs = juce::jmax (maxStartUs, sp.stats[i].startUs);
+            }
+            for (int i = 0; i < n; ++i)
+                if (i != last)
+                    maxOtherExecUs = juce::jmax (maxOtherExecUs,
+                                                 sp.stats[i].endUs - sp.stats[i].startUs);
+            if (last >= 0)
+            {
+                const auto& d = sp.stats[last];
+                const auto who = d.executor < 0 ? juce::String (u8 ("오디오"))
+                                                : "W" + juce::String ((int) d.executor);
+                md << u8 ("  - 지배 잡 #") << last << " (" << who << u8 ("): 시작 ")
+                   << juce::String (d.startUs / 1000.0, 2) << u8 (" ms · 실행 ")
+                   << juce::String ((d.endUs - d.startUs) / 1000.0, 2) << " ms\n"
+                   << u8 ("  - 그 외: 최대 실행 ") << juce::String (maxOtherExecUs / 1000.0, 2)
+                   << u8 (" ms · 최후 클레임 ") << juce::String (maxStartUs / 1000.0, 2) << " ms\n";
+            }
+        }
+    }
 
     md << "\n";
     md << u8 ("## 판정\n");

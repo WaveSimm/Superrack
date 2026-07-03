@@ -775,6 +775,10 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
     resetDspLoadStats();
     dspAvg.store (0.0f, std::memory_order_relaxed);
 
+    // A3: 잡 처리 시간이 블록 예산을 넘는 블록을 스파이크로 캡처.
+    if (sr > 0.0 && bs > 0)
+        workerPool.setSpikeThresholdUs ((juce::uint32) (bs * 1.0e6 / sr));
+
     for (auto& s : strips)
         s->prepare (sr, bs);
 }

@@ -30,6 +30,9 @@ public:
         int    xruns    = 0;     // 측정 구간 장치 xrun 델타
         int    overruns = 0;     // 측정 구간 예산 초과 콜백 수
 
+        bool hasSpike = false;   // A3: 예산 초과 블록의 잡별 타임라인 (구간 최악 1개)
+        AudioWorkerPool::SpikeSnapshot spike;
+
         bool isStable() const noexcept
         {
             return xruns == 0 && overruns == 0 && peakLoad < 0.95;

@@ -17,9 +17,10 @@ P0~P2 완료(실기), P3 견고화 + 통합 타임라인 녹음/재생 + 테이�
 - 잔여: 부하 중 체인 편집(D2) 글리치 확인 1건.
 - 설계 레퍼런스: tracktion_graph `LockFreeMultiThreadedNodePlayer`(참고만, GPL). 대기 = spin(backoff)→event. Windows: `TIME_CRITICAL`+MMCSS "Pro Audio", 워커 = 물리코어−2. → [`research/tech-stack-review-2026-07-02.md`](research/tech-stack-review-2026-07-02.md) §3
 
-### A3. 병렬 모드 간헐 스톨 조사  [P1] — 신규(2026-07-03 실측에서 분리)
-- 증상: **병렬 모드에서만** 300~1400%(3~14ms급) peak 스파이크. 직렬은 과부하에도 peak/avg ≈ 1.1~1.3. 저버퍼(96k/96)는 저채널부터, 96k/512 는 24ch+ 부터 표면화. avg 여유 구간(2단 16ch avg 62%)도 스파이크로 탈락 — **한계 확장의 실질 상한**(스톨 해결 시 96k/96 2단 8ch→16ch 기대).
-- 가설: 잡 클레임 후 워커 프리엠션(오디오 스레드 조인 대기) 또는 웨이크 지연. 13ms 는 event 2ms 타임아웃으로 설명 불가 — MMCSS 미적용 확인, 스핀 구간, 클레임-후-슬립 레이스 등 코드 검사 + 스톨 시 워커 상태 로깅(스파이크 블록의 잡별 소요 기록) 필요.
+### A3. 병렬 모드 간헐 스톨 조사  [P1] — **해결(2026-07-03, 계측 + 3실험)**
+- 원인 2계층 확정: ① **메가 스톨(10~28ms) = 코어 포화**(워커4+오디오=RT 5스레드/6코어 → 잔여 1코어 저순위 굶음, MMCSS 무관) ② **~2.3ms 주기 스톨 = 워커 MMCSS 스로틀링**(예약 윈도 20%/10ms 와 일치). 동기화 로직(게이트/티켓/조인)은 결백. → [`measurements/cpu-profile-parallel-2026-07-03.md`](measurements/cpu-profile-parallel-2026-07-03.md) A3 절
+- **기본값 개정**: 워커 = 물리코어 **−3** + MMCSS **미등록**(TIME_CRITICAL 만). 오버라이드 `SUPERRACK_WORKERS` / `SUPERRACK_MMCSS=1`. 96k/96 Q3→R 한계 8ch(직렬 2×), 최악 블록 12.4→1.3ms.
+- 부산물: 잡별 스파이크 계측(리포트 "스파이크 상세") 상시 탑재 — 향후 스톨 재발 시 즉시 판별 가능.
 
 ### B. 재생 견고화  [P1] — 기술검토 Top 3
 - **BufferingAudioSource 교체**: "짧은 락"이 아니라 백그라운드 스레드가 callbackLock 을 쥔 채 디스크 read(우선순위 역전, 소스 확인). → 채널당 SPSC 링버퍼 + 리더 스레드(prefetch), 언더런 무음. 레퍼런스: Mixxx CachingReader, Ardour butler. 검토 §5
@@ -30,7 +31,7 @@ P0~P2 완료(실기), P3 견고화 + 통합 타임라인 녹음/재생 + 테이�
 - A2 병렬화의 전제 조건.
 
 ### D3. 하우스키핑(기술검토 소과제)  [P3]
-- CpuProfiler 리포트 환경 섹션에 **병렬 DSP on/off + 워커 수 기록**(2026-07-03 검토에서 병렬 여부를 baseline 대비로 추정해야 했음).
+- ~~CpuProfiler 리포트에 병렬 DSP on/off + 워커 수 기록~~ — 완료(2026-07-03, A3 계측과 함께).
 - JUCE 8.0.11 → **8.0.14** 업그레이드(CMake GIT_TAG 변경, VST3 SDK 3.8.0 반영).
 - ThreadedWriter 튜닝: 채널당 FIFO 수 초(총 ~25-60MB), `setFlushInterval()` 주기 flush(크래시 복구성). RF64 는 JUCE 자동 — 작업 불필요.
 - CLAP 호스팅 **보류**(메이저 벤더 CLAP 출시 or JUCE 공식 호스팅 지원 시 재검토).

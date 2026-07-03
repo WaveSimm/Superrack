@@ -1,12 +1,12 @@
 cmake_minimum_required(VERSION 3.22)
 project(Superrack VERSION 0.1.0 LANGUAGES CXX)
 
-# ── JUCE 8.0.11 자동 다운로드 (최초 1회, 이후 캐시) ────────────────────────────
+# ── JUCE 8.0.14 자동 다운로드 (최초 1회, 이후 캐시. VST3 SDK 3.8.0 포함) ───────
 include(FetchContent)
 FetchContent_Declare(
     JUCE
     GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
-    GIT_TAG        8.0.11
+    GIT_TAG        8.0.14
     GIT_SHALLOW    TRUE)
 FetchContent_MakeAvailable(JUCE)
 

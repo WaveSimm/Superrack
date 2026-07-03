@@ -33,7 +33,7 @@ P0~P2 완료(실기), P3 견고화 + 통합 타임라인 녹음/재생 + 테이�
 
 ### D3. 하우스키핑(기술검토 소과제)  [P3]
 - ~~CpuProfiler 리포트에 병렬 DSP on/off + 워커 수 기록~~ — 완료(2026-07-03, A3 계측과 함께).
-- JUCE 8.0.11 → **8.0.14** 업그레이드(CMake GIT_TAG 변경, VST3 SDK 3.8.0 반영).
+- ~~JUCE 8.0.11 → 8.0.14 업그레이드~~ — **완료(2026-07-03, 실기 검증)**: GIT_TAG 변경 + `createEditorIfNeeded`→`createEditorAndMakeActive`(deprecated 정리). ASIO/체인/에디터 창/녹음·재생 실기 확인.
 - ThreadedWriter 튜닝: 채널당 FIFO 수 초(총 ~25-60MB), `setFlushInterval()` 주기 flush(크래시 복구성). RF64 는 JUCE 자동 — 작업 불필요.
 - CLAP 호스팅 **보류**(메이저 벤더 CLAP 출시 or JUCE 공식 호스팅 지원 시 재검토).
 

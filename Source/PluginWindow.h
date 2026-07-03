@@ -23,7 +23,7 @@ public:
     {
         setUsingNativeTitleBar (true);
 
-        if (auto* editor = plugin.createEditorIfNeeded())
+        if (auto* editor = plugin.createEditorAndMakeActive())   // JUCE 8.0.14 권장 API
         {
             setContentOwned (editor, true);                 // 창 크기를 에디터에 맞춤
             setResizable (editor->isResizable(), false);

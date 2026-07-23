@@ -109,31 +109,40 @@ struct PluginScanCache
 };
 ```
 
-- `scanPath` 시그니처: `const std::vector<juce::PluginDescription>* scanPath (const juce::String& path)` — 실패 시 nullptr. 빈 목록도 캐시(반복 실패 스캔 방지).
+- `scanPath` 시그니처: `const std::vector<juce::PluginDescription>& scanPath (const juce::String& path)` — 실패/빈 파일이면 빈 목록 반환(역시 캐시 — 반복 실패 스캔 방지). 호출부는 `pickByUid` 가 빈 목록에 nullptr 를 반환하는 것으로 실패를 처리한다. *(구현 중 nullptr 반환안에서 변경 — map 노드 참조 안정성을 활용, Check 문서 동기화 2026-07-24)*
 - uid 선택 헬퍼: `static const juce::PluginDescription* pickByUid (const std::vector<PluginDescription>&, int uid)` — uid==0 이면 첫 항목(기존 동작 보존, 단일 클래스 파일 하위 호환), 아니면 `uniqueId/deprecatedUid` 일치 항목, 없으면 nullptr.
 
 ### 3.2 PluginCatalog (신규 — FR-04/07)
 
 ```cpp
-class PluginCatalog : private juce::ChangeListener
+class PluginCatalog
 {
 public:
+    PluginCatalog();                                   // 생성 시 load() — 테스트는 로컬 인스턴스로 격리
     static PluginCatalog& get();                       // AppSettings 와 동일한 싱글턴 패턴
 
-    juce::KnownPluginList&       list();               // 브라우저가 구독 (ChangeBroadcaster)
-    void  scanSync();                                  // 전체 스캔 (모달 진행창, 메시지 스레드)
+    juce::KnownPluginList& list();
+    /** 전체 스캔 (동기, 메시지 스레드). onProgress(0..1, 파일) false 반환 시 중단. 완료 후 save(). */
+    void scanSync (const std::function<bool (float, const juce::String&)>& onProgress = nullptr);
     std::vector<juce::PluginDescription> scanSingleFile (const juce::String& path); // 파일에서 추가용
+    static bool matchesFilter (const juce::PluginDescription&, const juce::String& query); // 브라우저 검색
+
+    void load();                                       // 기동 시 XML → list (테스트 라운드트립 검증용 공개)
+    void save();                                       // scanSync/scanSingleFile 완료 시 명시 호출
+    static juce::File catalogFile();                   // <appdata>/plugin-catalog.xml
+    static juce::File deadMansPedalFile();             // <appdata>/plugin-scan-inflight.txt
 
 private:
-    void  load();                                      // 기동 시 XML → list
-    void  save();                                      // 변경 시 XML 저장 (changeListenerCallback)
-    juce::File catalogFile();                          // %APPDATA%/Superrack/plugin-catalog.xml
-    juce::File deadMansPedalFile();                    // %APPDATA%/Superrack/plugin-scan-inflight.txt
-
     juce::KnownPluginList knownList;
     juce::VST3PluginFormat vst3Format;
 };
 ```
+
+> *(구현 중 변경, Check 문서 동기화 2026-07-24)*: 당초 ChangeListener 자동저장 안이었으나,
+> ChangeBroadcaster 는 메시지 루프 의존이라 헤드리스 L1 테스트가 비결정적이 된다 —
+> 변경 지점이 scanSync/scanSingleFile 두 곳뿐이므로 명시적 save() 로 단순화.
+> scanSync 진행 콜백은 진행 모달 요구(§4.2 UI 펌핑)를 카탈로그의 GUI 무의존을
+> 유지한 채 충족하기 위한 추가.
 
 **영속 파일** (세션 스키마 무변경):
 

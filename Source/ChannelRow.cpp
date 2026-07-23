@@ -1,5 +1,6 @@
 #include "ChannelRow.h"
 #include "MainComponent.h"
+#include "PluginBrowser.h"
 #include "UiLookAndFeel.h"
 #include "Util.h"
 
@@ -135,7 +136,7 @@ ChannelRow::ChannelRow (int channelIndex, ChannelStrip& stripRef, MainComponent&
     addAndMakeVisible (gainSlider);
 
     addButton.setLookAndFeel (&boldButtonLnf());
-    addButton.onClick = [this] { chooseAndAddPlugin(); };
+    addButton.onClick = [this] { openPluginBrowser(); };
     addAndMakeVisible (addButton);
 
     rebuildChips();
@@ -218,33 +219,31 @@ void ChannelRow::removePluginAndRefresh (int index)
     owner.notifySessionChanged();
 }
 
-void ChannelRow::chooseAndAddPlugin()
+void ChannelRow::openPluginBrowser()
 {
-    juce::File initialDir ("C:/Program Files/Common Files/VST3");
-    if (! initialDir.isDirectory())
-        initialDir = juce::File::getSpecialLocation (juce::File::userHomeDirectory);
-
-    chooser = std::make_unique<juce::FileChooser> (u8 ("VST3 플러그인 선택"),
-                                                   initialDir, "*.vst3");
-    auto browserFlags = juce::FileBrowserComponent::openMode
-                      | juce::FileBrowserComponent::canSelectFiles;
-
-    chooser->launchAsync (browserFlags, [this] (const juce::FileChooser& fc)
+    // Design Ref: §4.3 — 파일 선택 대신 카탈로그 브라우저. 선택된 desc 는 uid 를
+    // 포함하므로 WaveShell 서브플러그인도 정확히 로드된다 (Plan SC-1).
+    // 브라우저가 열린 사이 이 행이 파괴될 수 있어(채널 수 변경 등) SafePointer.
+    PluginBrowser::open (
+        [safe = juce::Component::SafePointer<ChannelRow> (this)]
+        (const juce::PluginDescription& desc)
     {
-        const auto file = fc.getResult();
-        if (file == juce::File())
+        if (safe == nullptr)
             return;
 
         juce::String error;
-        if (strip.addPlugin (file, error))
+        if (safe->strip.addPlugin (desc, error))
         {
-            rebuildChips();
-            owner.notifySessionChanged();
+            safe->rebuildChips();
+            safe->owner.notifySessionChanged();
         }
         else
         {
+            // FR-08: 이름+파일+원인 표면화 — 미라이선스 Waves 가 대표 케이스.
             juce::NativeMessageBox::showMessageBoxAsync (
-                juce::MessageBoxIconType::WarningIcon, u8 ("플러그인 로드 실패"), error);
+                juce::MessageBoxIconType::WarningIcon, u8 ("플러그인 로드 실패"),
+                desc.name + " (" + juce::File (desc.fileOrIdentifier).getFileName() + ")\n"
+                + error);
         }
     });
 }

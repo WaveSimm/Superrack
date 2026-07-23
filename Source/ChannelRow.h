@@ -59,7 +59,7 @@ public:
     static constexpr int rowH = 28;
 
 private:
-    void chooseAndAddPlugin();
+    void openPluginBrowser();
 
     int channel;
     ChannelStrip& strip;
@@ -69,7 +69,6 @@ private:
     juce::Slider     gainSlider;          // 채널 출력 게인 (dB)
     juce::TextButton addButton { "+ VST3" };
     juce::OwnedArray<PluginChip> chips;
-    std::unique_ptr<juce::FileChooser> chooser;
 
     float meterLevel = 0.0f;
     juce::Rectangle<int> meterBounds;

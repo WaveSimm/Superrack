@@ -26,6 +26,8 @@ target_sources(Superrack PRIVATE
     Source/AppSettings.cpp
     Source/AudioEngine.cpp
     Source/ChannelStrip.cpp
+    Source/PluginCatalog.cpp
+    Source/PluginBrowser.cpp
     Source/MultitrackRecorder.cpp
     Source/TimelinePlayer.cpp
     Source/TakeManager.cpp
@@ -47,6 +49,7 @@ endif()
 target_compile_definitions(Superrack PRIVATE
     JUCE_ASIO=1                  # ASIO 백엔드 활성화
     JUCE_PLUGINHOST_VST3=1       # Phase 1~ 채널 VST3 체인 호스팅
+    JUCE_MODAL_LOOPS_PERMITTED=1 # 동기 플러그인 스캔 중 진행창 갱신 (PluginBrowser)
     JUCE_USE_CURL=0
     JUCE_WEB_BROWSER=0
     JUCE_STRICT_REFCOUNTEDPOINTER=1)
@@ -82,6 +85,8 @@ target_sources(SuperrackBeta PRIVATE
     Source/AudioEngine.cpp
     Source/BetaGate.cpp
     Source/ChannelStrip.cpp
+    Source/PluginCatalog.cpp
+    Source/PluginBrowser.cpp
     Source/MultitrackRecorder.cpp
     Source/TimelinePlayer.cpp
     Source/TakeManager.cpp
@@ -100,6 +105,7 @@ endif()
 target_compile_definitions(SuperrackBeta PRIVATE
     JUCE_ASIO=1
     JUCE_PLUGINHOST_VST3=1
+    JUCE_MODAL_LOOPS_PERMITTED=1
     JUCE_USE_CURL=0
     JUCE_WEB_BROWSER=0
     JUCE_STRICT_REFCOUNTEDPOINTER=1
@@ -129,6 +135,7 @@ target_sources(SuperrackTests PRIVATE
     Source/AppSettings.cpp
     Source/BetaGate.cpp
     Source/ChannelStrip.cpp
+    Source/PluginCatalog.cpp
     Source/MultitrackRecorder.cpp
     Source/TimelinePlayer.cpp
     Source/TakeManager.cpp

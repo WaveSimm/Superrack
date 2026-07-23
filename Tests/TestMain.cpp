@@ -20,6 +20,7 @@
 #include "../Source/BetaGate.h"
 #include "../Source/ChannelStrip.h"
 #include "../Source/MultitrackRecorder.h"
+#include "../Source/PluginCatalog.h"
 #include "../Source/TakeManager.h"
 #include "../Source/TimelinePlayer.h"
 
@@ -456,6 +457,65 @@ static void testBetaGate()
 }
 
 //==============================================================================
+//==============================================================================
+static void testPluginSystem (const juce::File& sandbox)
+{
+    section ("PluginSystem (waves-shell-support)");
+
+    // ── pickByUid: 다중 클래스 목록에서 uid 선택 ─────────────────────────────
+    std::vector<juce::PluginDescription> types;
+    {
+        juce::PluginDescription a; a.name = "SubA"; a.uniqueId = 111;
+        juce::PluginDescription b; b.name = "SubB"; b.uniqueId = 222; b.deprecatedUid = 22;
+        types.push_back (a);
+        types.push_back (b);
+    }
+    EXPECT (ChannelStrip::pickByUid (types, 0)   == &types[0]);   // uid 미기록(구세션) → 첫 항목
+    EXPECT (ChannelStrip::pickByUid (types, 222) == &types[1]);   // uniqueId 일치
+    EXPECT (ChannelStrip::pickByUid (types, 22)  == &types[1]);   // deprecatedUid 일치
+    EXPECT (ChannelStrip::pickByUid (types, 999) == nullptr);     // 불일치 → 폴백 유도
+    EXPECT (ChannelStrip::pickByUid ({}, 0)      == nullptr);     // 빈 목록
+
+    // ── scanPath: 실패(부재) 결과도 캐시 — 반복 스캔 없음 ────────────────────
+    juce::AudioPluginFormatManager fm;
+    PluginScanCache cache;
+    ChannelStrip strip (fm, cache);
+    const auto missing = sandbox.getChildFile ("nope.vst3").getFullPathName();
+    const auto& r1 = strip.scanPath (missing);
+    EXPECT (r1.empty());
+    EXPECT (cache.byPath.count (missing) == 1);
+    EXPECT (&r1 == &strip.scanPath (missing));   // 동일 캐시 엔트리 (재스캔 없음)
+
+    // ── PluginCatalog: save→load 라운드트립 + 블랙리스트 보존 ────────────────
+    {
+        PluginCatalog cat;                        // SUPERRACK_APPDATA 샌드박스 사용
+        juce::PluginDescription d;
+        d.name = "FakeShell Sub";
+        d.pluginFormatName = "VST3";
+        d.manufacturerName = "Waves";
+        d.uniqueId = 12345;
+        d.fileOrIdentifier = "C:/fake/shell.vst3";
+        cat.list().addType (d);
+        cat.list().addToBlacklist ("C:/fake/bad.vst3");
+        cat.save();
+    }
+    {
+        PluginCatalog cat2;
+        EXPECT (cat2.list().getNumTypes() == 1);
+        EXPECT (cat2.list().getTypes()[0].uniqueId == 12345);
+        EXPECT (cat2.list().getBlacklistedFiles().contains ("C:/fake/bad.vst3"));
+    }
+
+    // ── 브라우저 검색 필터: 이름/제조사 부분 일치 ────────────────────────────
+    juce::PluginDescription w;
+    w.name = "CLA-76";
+    w.manufacturerName = "Waves";
+    EXPECT (PluginCatalog::matchesFilter (w, ""));
+    EXPECT (PluginCatalog::matchesFilter (w, "cla"));
+    EXPECT (PluginCatalog::matchesFilter (w, "WAVES"));
+    EXPECT (! PluginCatalog::matchesFilter (w, "fabfilter"));
+}
+
 int main()
 {
     // 테스트 격리: 설정/저장이 실제 사용자 데이터에 닿지 않게 샌드박스로.
@@ -472,6 +532,7 @@ int main()
     juce::ScopedJuceInitialiser_GUI juceInit;
 
     testAppSettings (sandbox);      // 반드시 첫 번째 — AppSettings 싱글턴 초기화 전 env 필요
+    testPluginSystem (sandbox);     // waves-shell-support: 다중 클래스 스캔/uid/카탈로그
     testRecorder (sandbox);
     testTakeManager (sandbox);
     testTimelinePlayer (sandbox);

@@ -1,17 +1,29 @@
 {
   "version": "3.0",
-  "lastUpdated": "2026-07-02T00:00:00.000Z",
-  "activeFeatures": ["asio-vst3-host"],
-  "primaryFeature": "asio-vst3-host",
+  "lastUpdated": "2026-07-23T00:00:00.000Z",
+  "activeFeatures": ["waves-shell-support"],
+  "primaryFeature": "waves-shell-support",
   "features": {
+    "waves-shell-support": {
+      "title": "WaveShell 다중 클래스 VST3 지원 + 플러그인 브라우저",
+      "level": "Enterprise",
+      "stack": "JUCE 8 / C++ / CMake / MSVC / VST3",
+      "phase": "check",
+      "matchRate": 96,
+      "planDoc": "docs/01-plan/features/waves-shell-support.plan.md",
+      "designDoc": "docs/02-design/features/waves-shell-support.design.md",
+      "analysisDoc": "docs/03-analysis/waves-shell-support.analysis.md",
+      "startedAt": "2026-07-23T00:00:00.000Z"
+    },
     "asio-vst3-host": {
       "title": "ASIO 다채널 VST3 인서트 프로세서 (Superrack)",
       "level": "Enterprise",
       "stack": "JUCE 8 / C++ / CMake / MSVC / ASIO / VST3",
-      "phase": "Do",
+      "phase": "completed",
       "planDoc": "docs/01-plan/PLAN.md",
       "designDoc": "docs/02-design/DESIGN.md",
       "roadmap": ["P0-scaffold", "P1-vst3-chain", "P2-dry-record", "P3-hardening", "P4-32ch-scale"],
+      "completedNote": "2026-07-03 사이클 Report 완료(96.2%->98.5%, docs/04-report). phase 필드는 구버전 잔존값.",
       "currentMilestone": "P3-hardening + 통합 타임라인 녹음/재생 + 테이크 모델(신규 스코프) 실기 동작 확인. 다음: P4-32ch-scale 또는 재생 견고화. UI: 세로 랙+동적 채널수+셰브런 카드+트랜스포트 행+테이크 셀렉터.",
       "takeModel": "3파일 계층(설정 audio-settings.xml / 세션 session.json·.superrack / 테이크 takes/<id>/). 테이크=chNN_dry.wav+timeline.json(환경·length·history·updatedAt)+session.json 스냅샷. 녹음=현재 테이크 펀치인 커밋(제자리 갱신, .rectmp 스크래치). 새 테이크 버튼/테이크 셀렉터/삭제. 로드 시 세션 자동복원+환경 SR 불일치 경고. 재생=TimelinePlayer(BufferingAudioSource) playThroughChain 옵션, 라이브입력 뮤트, 통합 playhead.",
       "report": "docs/reports/2026-07-02-report.md",

@@ -91,26 +91,38 @@ void ChannelStrip::setOutGainDb (float db) noexcept
 }
 
 //==============================================================================
-bool ChannelStrip::scanPath (const juce::String& path, juce::PluginDescription& out)
+const std::vector<juce::PluginDescription>& ChannelStrip::scanPath (const juce::String& path)
 {
     // R3: 경로당 1회만 파일 스캔 — 여러 채널에 같은 플러그인 로드 시(세션 복원·
-    // 프로파일 체인 복제) 반복 스캔을 제거한다.
+    // 프로파일 체인 복제) 반복 스캔을 제거한다. 빈 결과도 캐시(반복 실패 방지).
+    // Design Ref: §3.1 — WaveShell 등 다중 클래스 파일은 목록 전체를 보존한다.
     if (const auto it = scanCache.byPath.find (path); it != scanCache.byPath.end())
-    {
-        out = it->second;
-        return true;
-    }
+        return it->second;
 
     juce::OwnedArray<juce::PluginDescription> types;
     juce::VST3PluginFormat fmt;
     fmt.findAllTypesForFile (types, path);
 
-    if (types.isEmpty())
-        return false;
+    auto& cached = scanCache.byPath[path];    // map 노드는 이후 삽입에도 참조 안정
+    cached.reserve ((size_t) types.size());
+    for (const auto* t : types)
+        cached.push_back (*t);
+    return cached;
+}
 
-    out = *types[0];
-    scanCache.byPath[path] = out;
-    return true;
+const juce::PluginDescription* ChannelStrip::pickByUid (const std::vector<juce::PluginDescription>& types,
+                                                        int uid) noexcept
+{
+    if (types.empty())
+        return nullptr;
+
+    if (uid == 0)
+        return &types.front();   // 구세션(uid 미기록)·단일 클래스 파일 하위 호환
+
+    for (const auto& d : types)
+        if (d.uniqueId == uid || d.deprecatedUid == uid)
+            return &d;
+    return nullptr;
 }
 
 bool ChannelStrip::findByFallback (const juce::String& originalPath, int uid,
@@ -125,13 +137,9 @@ bool ChannelStrip::findByFallback (const juce::String& originalPath, int uid,
         if (juce::File dir (extras[i]); dir.isDirectory())
             locations.add (dir, 0);
 
-    auto uidMatches = [uid] (const juce::PluginDescription& d)
-    {
-        return uid == 0 || d.uniqueId == uid || d.deprecatedUid == uid;
-    };
-
     // ① 빠른 경로: 표준 위치에서 같은 파일명(.vst3 는 파일 또는 번들 폴더).
     //    다른 드라이브/폴더에 설치된 흔한 케이스를 전체 스캔 없이 해결.
+    //    다중 클래스 파일도 pickByUid 로 해당 서브플러그인을 찾는다 (uid==0 → 첫 항목).
     if (const auto fileName = juce::File (originalPath).getFileName(); fileName.isNotEmpty())
     {
         for (int i = 0; i < locations.getNumPaths(); ++i)
@@ -142,22 +150,22 @@ bool ChannelStrip::findByFallback (const juce::String& originalPath, int uid,
 
             for (const auto& f : dir.findChildFiles (juce::File::findFilesAndDirectories,
                                                      true, fileName))
-                if (juce::PluginDescription d; scanPath (f.getFullPathName(), d) && uidMatches (d))
+                if (const auto* d = pickByUid (scanPath (f.getFullPathName()), uid))
                 {
-                    out = d;
+                    out = *d;
                     return true;
                 }
         }
     }
 
-    // ② uid 전체 스캔: 파일명까지 바뀐 경우. 표준 위치의 모든 VST3 를 스캔하므로
-    //    느릴 수 있으나(1회성 폴백, scanCache 로 중복 제거) 세션 유실보다 낫다.
+    // ② uid 전체 스캔: 파일명까지 바뀐 경우(Waves 쉘 버전업 V15→V16 등). 표준 위치의
+    //    모든 VST3 를 스캔하므로 느릴 수 있으나(1회성 폴백, scanCache 로 중복 제거)
+    //    세션 유실보다 낫다.
     if (uid != 0)
         for (const auto& id : fmt.searchPathsForPlugins (locations, true, false))
-            if (juce::PluginDescription d; scanPath (id, d)
-                && (d.uniqueId == uid || d.deprecatedUid == uid))
+            if (const auto* d = pickByUid (scanPath (id), uid))
             {
-                out = d;
+                out = *d;
                 return true;
             }
 
@@ -170,16 +178,18 @@ std::shared_ptr<ChannelStrip::Node> ChannelStrip::makeNode (const juce::String& 
                                                             int uid, const juce::String& displayName)
 {
     juce::PluginDescription desc;
-    if (! scanPath (path, desc))
+    if (const auto* d = pickByUid (scanPath (path), uid))
     {
-        // 경로 유실(다른 머신에서 저장된 세션 등) — uid/파일명으로 재탐색.
-        if (! findByFallback (path, uid, desc))
-        {
-            err = u8 ("플러그인을 찾지 못했습니다(경로·재탐색 모두 실패): ")
-                  + (displayName.isNotEmpty() ? displayName
-                                              : juce::File (path).getFileName());
-            return nullptr;
-        }
+        desc = *d;
+    }
+    // 경로 유실(다른 머신 세션) 또는 경로는 살았지만 uid 불일치(쉘 버전업으로
+    // 클래스 구성 변경) — uid/파일명으로 재탐색. Design Ref: §4.1
+    else if (! findByFallback (path, uid, desc))
+    {
+        err = u8 ("플러그인을 찾지 못했습니다(경로·재탐색 모두 실패): ")
+              + (displayName.isNotEmpty() ? displayName
+                                          : juce::File (path).getFileName());
+        return nullptr;
     }
 
     const double sr = sampleRate > 0.0 ? sampleRate : 48000.0;
@@ -191,7 +201,8 @@ std::shared_ptr<ChannelStrip::Node> ChannelStrip::makeNode (const juce::String& 
 
     if (inst == nullptr)
     {
-        err = u8 ("플러그인 로드 실패: ") + e;
+        // FR-08: 이름 포함 — 미라이선스 Waves 서브플러그인이 대표 실패 케이스.
+        err = u8 ("플러그인 로드 실패: ") + desc.name + u8 (" — ") + e;
         return nullptr;
     }
 
@@ -224,6 +235,20 @@ std::shared_ptr<ChannelStrip::Node> ChannelStrip::makeNode (const juce::String& 
 bool ChannelStrip::addPlugin (const juce::File& vst3File, juce::String& errorMessage)
 {
     auto node = makeNode (vst3File.getFullPathName(), false, {}, errorMessage);
+    if (node == nullptr)
+        return false;
+
+    editList.push_back (std::move (node));
+    publishChain();
+    return true;
+}
+
+bool ChannelStrip::addPlugin (const juce::PluginDescription& desc, juce::String& errorMessage)
+{
+    // 브라우저 선택은 uid 를 명시해 다중 클래스 파일(WaveShell)에서 정확한
+    // 서브플러그인을 로드한다. Plan SC-1.
+    const int uid = desc.uniqueId != 0 ? desc.uniqueId : desc.deprecatedUid;
+    auto node = makeNode (desc.fileOrIdentifier, false, {}, errorMessage, uid, desc.name);
     if (node == nullptr)
         return false;
 

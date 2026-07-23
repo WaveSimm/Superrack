@@ -8,14 +8,16 @@
 #include <vector>
 
 //==============================================================================
-/** VST3 스캔 결과 캐시 (설계 R3): .vst3 경로 → PluginDescription.
+/** VST3 스캔 결과 캐시 (설계 R3): .vst3 경로 → 그 파일의 "모든" 클래스 목록.
 
     findAllTypesForFile 은 파일 스캔이라 느리다 — 같은 플러그인을 여러 채널에
     로드할 때(세션 복원·프로파일 체인 복제) 경로당 1회만 스캔한다.
+    WaveShell 등 1파일 다중 클래스 모듈을 위해 목록 전체를 보존한다 — 빈 결과도
+    캐시해 반복 실패 스캔을 막는다 (waves-shell-support §3.1).
     메시지 스레드 전용. AudioEngine 이 소유하고 전 스트립이 공유한다. */
 struct PluginScanCache
 {
-    std::map<juce::String, juce::PluginDescription> byPath;
+    std::map<juce::String, std::vector<juce::PluginDescription>> byPath;
 };
 
 //==============================================================================
@@ -62,8 +64,22 @@ public:
 
     //==========================================================================
     // ── 메시지 스레드 (GUI) ────────────────────────────────────────────────
-    /** .vst3 파일을 로드해 체인 끝에 추가. 실패 시 errorMessage 채우고 false. */
+    /** .vst3 파일을 로드해 체인 끝에 추가. 실패 시 errorMessage 채우고 false.
+        다중 클래스 파일이면 첫 클래스가 로드된다 — 특정 서브플러그인은 desc 오버로드로. */
     bool addPlugin (const juce::File& vst3File, juce::String& errorMessage);
+
+    /** 브라우저/팝업에서 확정된 desc 로 직접 추가 — uid 를 명시해 다중 클래스
+        파일(WaveShell)에서 정확한 서브플러그인을 로드한다 (waves-shell-support §4.1). */
+    bool addPlugin (const juce::PluginDescription& desc, juce::String& errorMessage);
+
+    /** 다중 클래스 목록에서 uid 로 선택. uid==0 이면 첫 항목(구세션·단일 클래스
+        하위 호환), 일치 없으면 nullptr. */
+    static const juce::PluginDescription* pickByUid (const std::vector<juce::PluginDescription>& types,
+                                                     int uid) noexcept;
+
+    /** 경로의 모든 클래스를 스캔해 캐시 경유로 반환 — 실패/빈 파일이면 빈 목록
+        (역시 캐시됨). 메시지 스레드 전용. */
+    const std::vector<juce::PluginDescription>& scanPath (const juce::String& path);
     void removePlugin (int index);
     void setBypass (int index, bool shouldBypass);
 
@@ -102,9 +118,6 @@ private:
     std::shared_ptr<Node> makeNode (const juce::String& path, bool bypass,
                                     const juce::String& base64State, juce::String& err,
                                     int uid = 0, const juce::String& displayName = {});
-
-    /** 경로를 스캔해 desc 획득 (scanCache 경유, R3). 실패 시 false. */
-    bool scanPath (const juce::String& path, juce::PluginDescription& out);
 
     /** 경로 실패 시 폴백: ① 표준 VST3 위치에서 같은 파일명 검색(+uid 검증)
         ② uid 로 전체 스캔. 성공 시 out 채우고 true. 메시지 스레드 전용. */

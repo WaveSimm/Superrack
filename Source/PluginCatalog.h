@@ -11,8 +11,9 @@
     - 기동 시 XML 로드만(자동 스캔 없음) — 스캔은 브라우저의 [재스캔]으로만.
       첫 실행(빈 카탈로그)에도 세션 복원은 ChannelStrip 의 기존 scanPath/폴백
       경로로 동작한다 — ChannelStrip 은 이 클래스에 의존하지 않는다 (§2.3).
-    - 스캔은 메시지 스레드 동기(PluginDirectoryScanner). 진행 콜백으로 UI 갱신.
-    - dead-man's-pedal: 스캔 중 크래시한 파일은 다음 스캔에서 자동 블랙리스트.
+    - 스캔은 파일별 별도 프로세스(out-of-process, "--scan-file" 워커 모드) —
+      문제 플러그인이 멈추거나 죽어도 앱은 계속 진행. 진행 콜백으로 UI 갱신.
+    - 타임아웃/크래시/무효 파일은 자동 블랙리스트 → 다음 스캔에서 제외.
     - GUI 무의존(juce_audio_processors 만) — 헤드리스 L1 테스트 대상.
     메시지 스레드 전용. */
 class PluginCatalog
@@ -26,10 +27,15 @@ public:
 
     juce::KnownPluginList& list() noexcept { return knownList; }
 
-    /** 표준 VST3 위치 + AppSettings 추가 경로 전체 스캔(동기, 메시지 스레드).
-        onProgress(0..1, 현재 파일 경로) 가 false 를 반환하면 중단. 완료 후 save().
+    /** 표준 VST3 위치 + AppSettings 추가 경로 전체 스캔(메시지 스레드에서 호출,
+        파일별 워커 프로세스 + 120초 타임아웃). onProgress(0..1, 현재 파일 경로) 가
+        false 를 반환하면 중단. 완료 후 save().
         이미 스캔된 최신 항목·블랙리스트 파일은 건너뛴다. */
     void scanSync (const std::function<bool (float, const juce::String&)>& onProgress = nullptr);
+
+    /** 워커 프로세스 진입점 — Main 이 "--scan-file <plugin> <outXml>" 인자로 호출.
+        플러그인 1개를 로드해 PluginDescription XML 을 outXml 에 쓴다. 반환값 = 종료 코드. */
+    static int runScanWorker (const juce::String& pluginPath, const juce::String& outFilePath);
 
     /** 파일 1개 스캔 — "파일에서 추가" 경로. 결과를 카탈로그에도 병합(점진 구축).
         다중 클래스 파일이면 클래스 전부를 반환한다. */

@@ -1,5 +1,6 @@
 #include <juce_gui_extra/juce_gui_extra.h>
 #include "MainComponent.h"
+#include "PluginCatalog.h"
 
 #if SUPERRACK_BETA
  #include "BetaGate.h"
@@ -25,6 +26,23 @@ public:
 
     void initialise (const juce::String& /*commandLine*/) override
     {
+        // ── 스캔 워커 모드: "--scan-file <plugin> <outXml>" ───────────────────
+        // 플러그인 로드는 크래시/행 위험이 있어 별도 프로세스(여기)에서만 수행.
+        // 창·베타게이트·오디오를 만들지 않고 스캔 결과만 쓰고 즉시 종료한다.
+        {
+            const auto args = getCommandLineParameterArray();
+            const int  idx  = args.indexOf ("--scan-file");
+            if (idx >= 0 && idx + 2 < args.size())
+            {
+               #if JUCE_MAC
+                juce::Process::setDockIconVisible (false);   // 독 아이콘 깜빡임 방지
+               #endif
+                setApplicationReturnValue (PluginCatalog::runScanWorker (args[idx + 1], args[idx + 2]));
+                quit();
+                return;
+            }
+        }
+
         // 한글 글리프 렌더링을 위해 기본 sans-serif 폰트를 한국어 지원 폰트로.
         juce::LookAndFeel::getDefaultLookAndFeel()
             .setDefaultSansSerifTypefaceName ("Malgun Gothic");

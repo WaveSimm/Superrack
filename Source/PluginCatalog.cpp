@@ -47,8 +47,28 @@ void PluginCatalog::save()
 }
 
 //==============================================================================
+int PluginCatalog::runScanWorker (const juce::String& pluginPath, const juce::String& outFilePath)
+{
+    // 워커 프로세스 본체 — 플러그인 로드는 크래시/행 위험이 있으므로 여기(자식
+    // 프로세스)에서만 수행한다. 결과는 XML 파일로 부모에게 전달.
+    juce::VST3PluginFormat fmt;
+    juce::OwnedArray<juce::PluginDescription> types;
+    fmt.findAllTypesForFile (types, pluginPath);
+
+    juce::XmlElement root ("SCAN_RESULT");
+    for (const auto* t : types)
+        root.addChildElement (t->createXml().release());
+
+    return root.writeTo (juce::File (outFilePath)) ? 0 : 1;
+}
+
+//==============================================================================
 void PluginCatalog::scanSync (const std::function<bool (float, const juce::String&)>& onProgress)
 {
+    // Design §4.2 개정: 파일별 별도 프로세스(out-of-process) 스캔.
+    // 문제 플러그인이 멈추거나 죽어도 워커 프로세스만 죽는다 — 앱은 다음 파일로
+    // 진행. 타임아웃/크래시/무효 파일은 블랙리스트 → 다음 스캔에서 제외
+    // (기존 dead-man's-pedal 을 대체하며, UI "응답 없음" 문제를 해결).
     auto locations = vst3Format.getDefaultLocationsToSearch();
 
     // 사용자 지정 추가 경로 — ChannelStrip::findByFallback 과 동일 규칙(표준보다 먼저).
@@ -57,19 +77,78 @@ void PluginCatalog::scanSync (const std::function<bool (float, const juce::Strin
         if (juce::File dir (extras[i]); dir.isDirectory())
             locations.add (dir, 0);
 
-    const auto pedal = deadMansPedalFile();
-    pedal.getParentDirectory().createDirectory();
+    const auto files = vst3Format.searchPathsForPlugins (locations, true /*recursive*/,
+                                                         false /*async instantiation 불필요*/);
+    const auto exe   = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
 
-    // Plan RISK: 스캔 중 크래시한 파일은 pedal 에 남아 다음 스캔에서 자동
-    // 블랙리스트된다 (JUCE dead-man's-pedal). 블랙리스트 파일은 건너뛴다.
-    juce::PluginDirectoryScanner scanner (knownList, vst3Format, locations,
-                                          true /*recursive*/, pedal,
-                                          false /*async instantiation 불필요 (VST3/Win)*/);
+    // UAD 등 첫 로드에 하드웨어/인증 확인이 걸리는 플러그인 감안 — 넉넉히.
+    constexpr juce::uint32 perFileTimeoutMs = 120'000;
 
-    juce::String current;
-    while (scanner.scanNextFile (true /*최신 항목 재스캔 안 함*/, current))
-        if (onProgress != nullptr && ! onProgress (scanner.getProgress(), current))
+    for (int i = 0; i < files.size(); ++i)
+    {
+        const auto& path = files[i];
+        const float progress = (float) (i + 1) / (float) juce::jmax (1, files.size());
+
+        if (onProgress != nullptr && ! onProgress (progress, path))
             break;
+
+        if (knownList.getBlacklistedFiles().contains (path)
+            || knownList.isListingUpToDate (path, vst3Format))
+            continue;
+
+        const auto tmpOut = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                .getNonexistentChildFile ("superrack-scan", ".xml");
+
+        juce::ChildProcess worker;
+        bool aborted = false;
+
+        juce::StringArray cmd;
+        cmd.add (exe.getFullPathName());
+        cmd.add ("--scan-file");
+        cmd.add (path);
+        cmd.add (tmpOut.getFullPathName());
+
+        if (worker.start (cmd, 0))
+        {
+            const auto t0 = juce::Time::getMillisecondCounter();
+            while (worker.isRunning())
+            {
+                if (juce::Time::getMillisecondCounter() - t0 > perFileTimeoutMs)
+                {
+                    worker.kill();   // 행(hang) — 아래에서 블랙리스트
+                    break;
+                }
+                if (onProgress != nullptr && ! onProgress (progress, path))
+                {
+                    worker.kill();   // 사용자 중단
+                    aborted = true;
+                    break;
+                }
+                juce::Thread::sleep (30);
+            }
+        }
+
+        bool gotResults = false;
+        if (! aborted && worker.getExitCode() == 0)
+            if (const auto xml = juce::XmlDocument::parse (tmpOut))
+                for (const auto* e : xml->getChildIterator())
+                {
+                    juce::PluginDescription d;
+                    if (d.loadFromXml (*e))
+                    {
+                        knownList.addType (d);
+                        gotResults = true;
+                    }
+                }
+
+        tmpOut.deleteFile();
+
+        if (aborted)
+            break;
+
+        if (! gotResults)
+            knownList.addToBlacklist (path);   // 크래시/타임아웃/무효 — 재스캔 시 제외
+    }
 
     save();
 }

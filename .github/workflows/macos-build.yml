@@ -30,14 +30,17 @@ jobs:
           echo "Running: $TESTBIN"
           "$TESTBIN"
 
-      - name: Package app
+      - name: Package app as DMG
         run: |
           APP=$(find build/SuperrackBeta_artefacts -type d -name "*.app" | head -1)
           echo "Packaging: $APP"
           lipo -info "$APP/Contents/MacOS/"*
-          ditto -c -k --keepParent "$APP" Superrack-Beta-macOS.zip
+          mkdir dmg-root
+          cp -R "$APP" dmg-root/
+          ln -s /Applications dmg-root/Applications
+          hdiutil create -volname "Superrack Beta" -srcfolder dmg-root -ov -format UDZO "Superrack-Beta-macOS.dmg"
 
       - uses: actions/upload-artifact@v4
         with:
           name: Superrack-Beta-macOS
-          path: Superrack-Beta-macOS.zip
+          path: Superrack-Beta-macOS.dmg

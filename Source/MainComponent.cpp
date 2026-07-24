@@ -81,7 +81,11 @@ public:
 
         vst3Paths.setMultiLine (true);
         vst3Paths.setReturnKeyStartsNewLine (true);
+       #if JUCE_MAC
+        vst3Paths.setTextToShowWhenEmpty (u8 ("예) /Volumes/External/VST3"), juce::Colours::grey);
+       #else
         vst3Paths.setTextToShowWhenEmpty (u8 ("예) D:\\MyPlugins\\VST3"), juce::Colours::grey);
+       #endif
         vst3Paths.onFocusLost = [this]
         {
             juce::StringArray lines;

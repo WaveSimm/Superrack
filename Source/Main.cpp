@@ -22,7 +22,12 @@ public:
        #endif
     }
     const juce::String getApplicationVersion() override    { return "0.1.0"; }
-    bool moreThanOneInstanceAllowed() override             { return false; }
+    // 스캔 워커("--scan-file")는 부모 앱과 동시에 떠야 하므로 단일 인스턴스 예외.
+    // (예외 없이는 워커가 기존 인스턴스에 인자만 전달하고 즉시 종료 → 스캔 결과가 전부 빈다.)
+    bool moreThanOneInstanceAllowed() override
+    {
+        return getCommandLineParameterArray().contains ("--scan-file");
+    }
 
     void initialise (const juce::String& /*commandLine*/) override
     {

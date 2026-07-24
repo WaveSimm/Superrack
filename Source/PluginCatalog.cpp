@@ -77,6 +77,10 @@ void PluginCatalog::scanSync (const std::function<bool (float, const juce::Strin
         if (juce::File dir (extras[i]); dir.isDirectory())
             locations.add (dir, 0);
 
+    // 전체 재스캔은 블랙리스트도 다시 평가 — 이전 회차의 타임아웃/크래시/환경 문제가
+    // 영구 제외로 굳지 않게 한다. 진짜 문제 플러그인은 이번 회차에서 다시 걸러진다.
+    knownList.clearBlacklistedFiles();
+
     const auto files = vst3Format.searchPathsForPlugins (locations, true /*recursive*/,
                                                          false /*async instantiation 불필요*/);
     const auto exe   = juce::File::getSpecialLocation (juce::File::currentExecutableFile);

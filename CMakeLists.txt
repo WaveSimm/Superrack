@@ -47,7 +47,7 @@ if(MSVC)
 endif()
 
 target_compile_definitions(Superrack PRIVATE
-    JUCE_ASIO=1                  # ASIO 백엔드 활성화
+    $<$<PLATFORM_ID:Windows>:JUCE_ASIO=1>   # ASIO 백엔드 (Windows 전용 — 맥은 CoreAudio)
     JUCE_PLUGINHOST_VST3=1       # Phase 1~ 채널 VST3 체인 호스팅
     JUCE_MODAL_LOOPS_PERMITTED=1 # 동기 플러그인 스캔 중 진행창 갱신 (PluginBrowser)
     JUCE_USE_CURL=0
@@ -103,7 +103,7 @@ if(MSVC)
 endif()
 
 target_compile_definitions(SuperrackBeta PRIVATE
-    JUCE_ASIO=1
+    $<$<PLATFORM_ID:Windows>:JUCE_ASIO=1>
     JUCE_PLUGINHOST_VST3=1
     JUCE_MODAL_LOOPS_PERMITTED=1
     JUCE_USE_CURL=0

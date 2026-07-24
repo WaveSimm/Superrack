@@ -221,7 +221,11 @@ void PluginBrowser::rescan()
 
 void PluginBrowser::addFromFile()
 {
+   #if JUCE_MAC
+    juce::File initialDir ("/Library/Audio/Plug-Ins/VST3");
+   #else
     juce::File initialDir ("C:/Program Files/Common Files/VST3");
+   #endif
     if (! initialDir.isDirectory())
         initialDir = juce::File::getSpecialLocation (juce::File::userHomeDirectory);
 

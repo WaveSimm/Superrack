@@ -7,7 +7,13 @@
  #pragma comment (lib, "avrt.lib")
 #endif
 
-#include <immintrin.h>   // _mm_pause
+#if JUCE_INTEL
+ #include <immintrin.h>   // _mm_pause (x86 전용 — arm64 맥에서는 yield 사용)
+#endif
+
+#if JUCE_MAC
+ #include <pthread.h>
+#endif
 
 namespace
 {
@@ -198,6 +204,10 @@ void AudioWorkerPool::workerLoop (Worker& self, int workerIndex)
         DWORD mmcssTaskIndex = 0;
         AvSetMmThreadCharacteristicsW (L"Pro Audio", &mmcssTaskIndex);
     }
+   #elif JUCE_MAC
+    // macOS: 워커를 최고 QoS 클래스로 — CoreAudio 스레드급은 아니지만
+    // 스핀-대기 워커에 충분. (time-constraint policy 는 추후 튜닝 여지)
+    pthread_set_qos_class_self_np (QOS_CLASS_USER_INTERACTIVE, 0);
    #endif
 
     while (! shouldExit.load (std::memory_order_acquire))

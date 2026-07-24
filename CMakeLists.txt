@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Superrack VERSION 0.1.0 LANGUAGES CXX)
+project(Superrack VERSION 0.1.0 LANGUAGES C CXX)
 
 # ── JUCE 8.0.14 자동 다운로드 (최초 1회, 이후 캐시. VST3 SDK 3.8.0 포함) ───────
 include(FetchContent)

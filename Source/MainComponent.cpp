@@ -771,8 +771,8 @@ void MainComponent::showSessionMenu()
             if (choice == 0)
                 return;
 
-            const auto dir = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
-                                 .getChildFile ("Superrack");
+            // 저장 위치 설정과 동일 루트 사용 (맥에서 문서 폴더 TCC 프롬프트 회피).
+            const auto dir = AppSettings::get().storageRoot();
             dir.createDirectory();
 
             if (choice == 1)   // 저장

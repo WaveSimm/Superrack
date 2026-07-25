@@ -17,9 +17,16 @@ MultitrackRecorder::~MultitrackRecorder()
 
 juce::File MultitrackRecorder::getRecordBaseDir()
 {
+   #if JUCE_MAC
+    // AppSettings::storageRoot 기본값과 동일 규칙 (macOS 는 TCC 회피 — 음악 폴더).
+    return juce::File::getSpecialLocation (juce::File::userMusicDirectory)
+               .getChildFile ("Superrack")
+               .getChildFile ("rec");
+   #else
     return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
                .getChildFile ("Superrack")
                .getChildFile ("rec");
+   #endif
 }
 
 //==============================================================================

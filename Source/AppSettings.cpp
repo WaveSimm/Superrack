@@ -39,8 +39,15 @@ juce::File AppSettings::storageRoot() const
         if (juce::File dir (custom); dir.isDirectory() || dir.createDirectory())
             return dir;
 
+   #if JUCE_MAC
+    // macOS: 문서 폴더는 TCC(개인정보 보호) 승인 대상 — 미서명 베타에서는 승인이
+    // 유지되지 않아 녹음 파일 생성 실패의 원인이 된다. 승인 불필요한 음악 폴더 사용.
+    return juce::File::getSpecialLocation (juce::File::userMusicDirectory)
+               .getChildFile ("Superrack");
+   #else
     return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
                .getChildFile ("Superrack");
+   #endif
 }
 
 void AppSettings::setStorageRoot (const juce::File& dir)

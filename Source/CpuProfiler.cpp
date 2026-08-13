@@ -174,17 +174,29 @@ juce::File CpuProfiler::writeReport()
                : u8 ("OFF (직렬)"))
        << "\n";
 
-    // 측정에 쓰인 체인 (Ch1 기준 — 전 합성 채널에 복제)
+    // 측정에 쓰인 체인 (Ch1 기준 — 전 합성 채널에 복제).
+    // bypass 는 processBlock 자체를 건너뛰므로(ChannelStrip 참조) 비용이 0 이다.
+    // 표기가 없으면 "체인 N단"과 실제 부하가 어긋나 런 간 비교가 조용히 깨진다.
     md << u8 ("- 체인(Ch1, 전 채널 복제): ");
+    int numBypassed = 0;
     if (auto* s0 = engine.getStrip (0))
     {
         if (s0->getNumPlugins() == 0)
             md << u8 ("(비어 있음 — 패스스루 부하만 측정됨)");
         else
             for (int i = 0; i < s0->getNumPlugins(); ++i)
-                md << (i > 0 ? " → " : "") << s0->getPluginName (i);
+            {
+                const bool byp = s0->isBypassed (i);
+                numBypassed += byp ? 1 : 0;
+                md << (i > 0 ? " → " : "") << s0->getPluginName (i)
+                   << (byp ? u8 (" **[bypass — 부하 없음]**") : "");
+            }
     }
     md << "\n";
+
+    if (numBypassed > 0)
+        md << u8 ("- ⚠ bypass ") << numBypassed
+           << u8 ("개 — 실제 부하는 활성 플러그인만. 다른 런과 비교 시 주의.\n");
 
     if (! report.prepareErrors.isEmpty())
         md << u8 ("- 복제 오류: ") << report.prepareErrors.joinIntoString (" / ") << "\n";

@@ -1,6 +1,5 @@
 #include "AudioEngine.h"
 #include "AppSettings.h"
-#include "PluginCatalog.h"
 #include "Util.h"
 #include <cmath>
 
@@ -14,39 +13,6 @@ AudioEngine::AudioEngine()
 
     // JUCE 8.0.11: addDefaultFormats() 는 삭제됨 → 자유 함수 사용. VST3 등록.
     juce::addDefaultFormatsToManager (formatManager);
-
-    // 세션 복원은 카탈로그를 먼저 본다 — 아웃오브프로세스 스캔 결과라 이름·uid 가
-    // 정확하고, 인프로세스 쉘 스캔(WaveShell 수십 초)을 피한다. 카탈로그가 비어
-    // 있으면(첫 실행) 기존 스캔·폴백 경로가 그대로 동작한다.
-    scanCache.resolveDescription = [] (const juce::String& path, int uid,
-                                       const juce::String& name,
-                                       juce::PluginDescription& out) -> bool
-    {
-        if (name.isEmpty())
-            return false;   // 이름이 없으면 스캔 경로의 uid 규칙에 맡긴다
-
-        const auto types = PluginCatalog::get().list().getTypes();
-
-        const auto matches = [&] (const juce::PluginDescription& d, bool needPath, bool needUid)
-        {
-            if (d.name != name)                                        return false;
-            if (needPath && d.fileOrIdentifier != path)                return false;
-            if (needUid && ! (d.uniqueId == uid || d.deprecatedUid == uid)) return false;
-            return true;
-        };
-
-        // 경로+uid+이름 → uid+이름 → 이름. 앞의 것이 더 강한 증거다.
-        for (const bool needPath : { true, false })
-            for (const bool needUid : { true, false })
-                for (const auto& d : types)
-                    if (matches (d, needPath, needUid && uid != 0))
-                    {
-                        out = d;
-                        return true;
-                    }
-
-        return false;
-    };
 
     // strips 는 maxChannels 개를 미리 생성한다(주소 안정 → 오디오/GUI 리사이즈 경쟁 없음).
     // 실제 처리/표시 채널 수는 getActiveChannelCount() 로 제한한다.
@@ -82,26 +48,13 @@ void AudioEngine::initialise()
     lastChannelCount = getActiveChannelCount();
 
     // 자동 저장된 세션(플러그인 체인+게인) 복원. strips 는 위에서 sr/bs 준비됨.
-    //
-    // **메시지 루프가 돈 뒤에** 복원해야 한다. 여기(생성자 경로)서 바로 로드하면
-    // WaveShell 처럼 자체 스레드·아이들 콜백으로 클래스 목록을 초기화하는 쉘이
-    // 준비되지 않은 상태라, 요청한 것과 다른 서브플러그인이 만들어진다
-    // (실측: Curves Resolve Stereo → Magma Lil Tube Stereo, 즉시 4회 재시도해도 동일.
-    //  같은 플러그인을 브라우저로 추가하면 정상 — 차이는 메시지 루프뿐이다).
-    if (const auto sessionFile = getSessionFile(); sessionFile.existsAsFile())
-        juce::MessageManager::callAsync (
-            [this, sessionFile, safe = juce::WeakReference<AudioEngine> (this)]
-            {
-                if (safe == nullptr)
-                    return;
-
-                // 실패 항목을 버리면 체인이 조용히 짧아지거나 바뀐다 — 사용자가
-                // 알아채지 못한 채 다음 자동 저장이 그 상태를 확정해 버린다.
-                loadSessionFromFile (sessionFile, sessionRestoreErrors);
-
-                if (onSessionRestored != nullptr)
-                    onSessionRestored();
-            });
+    const auto sessionFile = getSessionFile();
+    if (sessionFile.existsAsFile())
+    {
+        juce::StringArray errors;
+        loadSessionFromFile (sessionFile, errors);
+        // 복원 실패 항목은 무시(경로 이동/미설치 플러그인 등). GUI 는 로드된 것만 표시.
+    }
 
     // 가장 최근 테이크를 현재 테이크로 (재시작 후에도 재생 가능).
     if (auto takes = takeMgr.listTakes(); ! takes.isEmpty())

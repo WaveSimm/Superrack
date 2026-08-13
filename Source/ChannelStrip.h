@@ -3,7 +3,6 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <farbot/RealtimeObject.hpp>
 #include <atomic>
-#include <functional>
 #include <map>
 #include <memory>
 #include <vector>
@@ -19,15 +18,6 @@
 struct PluginScanCache
 {
     std::map<juce::String, std::vector<juce::PluginDescription>> byPath;
-
-    /** 선택적 설명 조회기 — 있으면 파일 스캔보다 **먼저** 쓴다.
-        앱은 여기에 PluginCatalog(아웃오브프로세스 스캔 결과) 조회를 꽂는다.
-        인프로세스 스캔은 WaveShell 같은 대형 쉘에서 느리고 결과도 불완전해
-        엉뚱한 서브플러그인 선택·기동 지연의 원인이 된다. ChannelStrip 은
-        PluginCatalog 를 직접 참조하지 않는다(§2.3 — 헤드리스 테스트 유지).
-        (path, uid, name) → out. 못 찾으면 false. */
-    std::function<bool (const juce::String& path, int uid, const juce::String& name,
-                        juce::PluginDescription& out)> resolveDescription;
 };
 
 //==============================================================================
@@ -82,12 +72,10 @@ public:
         파일(WaveShell)에서 정확한 서브플러그인을 로드한다 (waves-shell-support §4.1). */
     bool addPlugin (const juce::PluginDescription& desc, juce::String& errorMessage);
 
-    /** 다중 클래스 목록에서 선택 — uid+이름 → 이름 → uid 순. JUCE 가 인스턴스화
-        시 이름과 uid 를 모두 대조하므로 여기서도 이름을 함께 봐야 WaveShell 에서
-        엉뚱한 서브플러그인이 뽑히지 않는다. 단서가 없으면 단일 클래스 파일에
-        한해 첫 항목, 그 외에는 nullptr. */
+    /** 다중 클래스 목록에서 uid 로 선택. uid==0 이면 첫 항목(구세션·단일 클래스
+        하위 호환), 일치 없으면 nullptr. */
     static const juce::PluginDescription* pickByUid (const std::vector<juce::PluginDescription>& types,
-                                                     int uid, const juce::String& name) noexcept;
+                                                     int uid) noexcept;
 
     /** 경로의 모든 클래스를 스캔해 캐시 경유로 반환 — 실패/빈 파일이면 빈 목록
         (역시 캐시됨). 메시지 스레드 전용. */
@@ -117,11 +105,6 @@ private:
         std::atomic<bool> bypassed { false };
         juce::String filePath;        // 세션 복원용 .vst3 경로 (폴백 성공 시 로컬 경로로 갱신됨)
         int          uid = 0;         // VST3 class UID (PluginDescription::uniqueId) — 머신 독립 식별자
-        // 우리가 **요청한** PluginDescription 의 이름. plugin->getName() 을 쓰면 안 된다:
-        // WaveShell 처럼 클래스가 수백 개인 쉘은 인스턴스가 다른 서브플러그인 이름을
-        // 보고하는 경우가 있고, 그 이름이 세션에 저장되면 다음 복원의 조회 키가
-        // 오염되어 진짜로 다른 플러그인이 로드된다.
-        juce::String descName;
     };
 
     /** shared_ptr 벡터 = 복사 가능(farbot 요구) + 노드 파괴는 마지막 참조 소유
@@ -138,8 +121,7 @@ private:
 
     /** 경로 실패 시 폴백: ① 표준 VST3 위치에서 같은 파일명 검색(+uid 검증)
         ② uid 로 전체 스캔. 성공 시 out 채우고 true. 메시지 스레드 전용. */
-    bool findByFallback (const juce::String& originalPath, int uid,
-                         const juce::String& name, juce::PluginDescription& out);
+    bool findByFallback (const juce::String& originalPath, int uid, juce::PluginDescription& out);
     void prepareNode (Node& node);
 
     /** editList 를 RT 뷰로 복사 스왑(메시지 스레드). 구버전은 여기서 해제. */

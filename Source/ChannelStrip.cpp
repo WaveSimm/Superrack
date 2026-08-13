@@ -111,48 +111,22 @@ const std::vector<juce::PluginDescription>& ChannelStrip::scanPath (const juce::
 }
 
 const juce::PluginDescription* ChannelStrip::pickByUid (const std::vector<juce::PluginDescription>& types,
-                                                        int uid, const juce::String& name) noexcept
+                                                        int uid) noexcept
 {
-    // 이름을 함께 대조하는 것이 핵심이다. JUCE 는 실제 인스턴스화 시
-    // VST3ModuleHandle::findClassMatchingDescription 에서 **이름과 uid 를 모두**
-    // 요구한다. 여기서 uid 만 보고 고르면 WaveShell 처럼 클래스가 수백 개인
-    // 파일에서 엉뚱한 서브플러그인이 선택될 수 있다 — 로드는 성공하므로
-    // 사용자에게는 "플러그인이 조용히 바뀐" 것으로 보인다.
     if (types.empty())
         return nullptr;
 
-    const bool haveUid  = uid != 0;
-    const bool haveName = name.isNotEmpty();
+    if (uid == 0)
+        return &types.front();   // 구세션(uid 미기록)·단일 클래스 파일 하위 호환
 
-    // ① uid + 이름 동시 일치 — 정상 경로.
-    if (haveUid && haveName)
-        for (const auto& d : types)
-            if ((d.uniqueId == uid || d.deprecatedUid == uid) && d.name == name)
-                return &d;
-
-    // ② 이름만 일치 — 쉘 버전업으로 클래스 uid 가 바뀐 경우.
-    if (haveName)
-        for (const auto& d : types)
-            if (d.name == name)
-                return &d;
-
-    // ③ uid 만 일치 — 이름을 기록하지 않은 구세션. 이름이 있는데 못 찾은
-    //    경우는 여기 오지 않는다(위에서 이미 실패 = 다른 플러그인일 위험).
-    if (haveUid && ! haveName)
-        for (const auto& d : types)
-            if (d.uniqueId == uid || d.deprecatedUid == uid)
-                return &d;
-
-    // ④ 단서가 전혀 없으면 단일 클래스 파일에 한해 첫 항목. 다중 클래스에서
-    //    첫 항목을 집으면 임의의 플러그인이 되므로 실패시킨다.
-    if (! haveUid && ! haveName && types.size() == 1)
-        return &types.front();
-
+    for (const auto& d : types)
+        if (d.uniqueId == uid || d.deprecatedUid == uid)
+            return &d;
     return nullptr;
 }
 
 bool ChannelStrip::findByFallback (const juce::String& originalPath, int uid,
-                                   const juce::String& name, juce::PluginDescription& out)
+                                   juce::PluginDescription& out)
 {
     juce::VST3PluginFormat fmt;
     auto locations = fmt.getDefaultLocationsToSearch();
@@ -176,7 +150,7 @@ bool ChannelStrip::findByFallback (const juce::String& originalPath, int uid,
 
             for (const auto& f : dir.findChildFiles (juce::File::findFilesAndDirectories,
                                                      true, fileName))
-                if (const auto* d = pickByUid (scanPath (f.getFullPathName()), uid, name))
+                if (const auto* d = pickByUid (scanPath (f.getFullPathName()), uid))
                 {
                     out = *d;
                     return true;
@@ -187,9 +161,9 @@ bool ChannelStrip::findByFallback (const juce::String& originalPath, int uid,
     // ② uid 전체 스캔: 파일명까지 바뀐 경우(Waves 쉘 버전업 V15→V16 등). 표준 위치의
     //    모든 VST3 를 스캔하므로 느릴 수 있으나(1회성 폴백, scanCache 로 중복 제거)
     //    세션 유실보다 낫다.
-    if (uid != 0 || name.isNotEmpty())
+    if (uid != 0)
         for (const auto& id : fmt.searchPathsForPlugins (locations, true, false))
-            if (const auto* d = pickByUid (scanPath (id), uid, name))
+            if (const auto* d = pickByUid (scanPath (id), uid))
             {
                 out = *d;
                 return true;
@@ -204,45 +178,23 @@ std::shared_ptr<ChannelStrip::Node> ChannelStrip::makeNode (const juce::String& 
                                                             int uid, const juce::String& displayName)
 {
     juce::PluginDescription desc;
-
-    // ⓪ 카탈로그 조회 우선 — 아웃오브프로세스 스캔 결과라 이름·uid 가 정확하고
-    //    파일 스캔이 없다. 인프로세스 findAllTypesForFile 은 WaveShell 같은 대형
-    //    쉘에서 수십 초가 걸리고 결과도 불완전해, 기동 복원이 여기 걸리면
-    //    창이 뜨기 전에 앱이 멈춘 것처럼 보인다.
-    if (scanCache.resolveDescription != nullptr
-        && scanCache.resolveDescription (path, uid, displayName, desc))
-    {
-        // 찾음 — 아래 스캔 경로를 건너뛴다.
-    }
-    else if (const auto* d = pickByUid (scanPath (path), uid, displayName))
+    if (const auto* d = pickByUid (scanPath (path), uid))
     {
         desc = *d;
     }
     // 경로 유실(다른 머신 세션) 또는 경로는 살았지만 uid 불일치(쉘 버전업으로
     // 클래스 구성 변경) — uid/파일명으로 재탐색. Design Ref: §4.1
-    else if (! findByFallback (path, uid, displayName, desc))
+    else if (! findByFallback (path, uid, desc))
     {
-        // 다중 클래스 파일을 단서 없이(파일에서 추가) 연 경우는 원인이 다르다 —
-        // 첫 항목을 임의로 집지 않고 브라우저를 쓰도록 안내한다.
-        if (uid == 0 && displayName.isEmpty() && scanPath (path).size() > 1)
-            err = u8 ("플러그인이 여러 개 든 파일입니다 — 브라우저에서 선택하세요: ")
-                  + juce::File (path).getFileName();
-        else
-            err = u8 ("플러그인을 찾지 못했습니다(경로·재탐색 모두 실패): ")
-                  + (displayName.isNotEmpty() ? displayName
-                                              : juce::File (path).getFileName());
+        err = u8 ("플러그인을 찾지 못했습니다(경로·재탐색 모두 실패): ")
+              + (displayName.isNotEmpty() ? displayName
+                                          : juce::File (path).getFileName());
         return nullptr;
     }
 
     const double sr = sampleRate > 0.0 ? sampleRate : 48000.0;
     const int    bs = maxBlock   > 0   ? maxBlock   : 512;
 
-    // 만들어진 인스턴스가 정말 요청한 그 플러그인인지 확인한다. WaveShell 처럼
-    // 클래스 목록을 지연 초기화하는 쉘은 **첫 인스턴스화에서 엉뚱한 서브플러그인을
-    // 돌려준다** — desc(이름·uid·경로)가 정확해도 그렇다. 모듈이 한 번 로드되고
-    // 나면 다음 시도는 맞으므로 몇 번 재시도한다.
-    // (실측: Curves Resolve Stereo 요청 → 1차 Magma Lil Tube Stereo, 2차 정상.
-    //  세션 복원에서 ch1 만 틀리고 ch2 는 맞던 비대칭도 이 순서 효과였다.)
     juce::String e;
     std::unique_ptr<juce::AudioPluginInstance> inst (
         formats.createPluginInstance (desc, sr, bs, e));
@@ -253,17 +205,6 @@ std::shared_ptr<ChannelStrip::Node> ChannelStrip::makeNode (const juce::String& 
         err = u8 ("플러그인 로드 실패: ") + desc.name + u8 (" — ") + e;
         return nullptr;
     }
-
-    // 인스턴스가 보고하는 이름이 요청과 다른 경우가 있다 — WaveShell 실측:
-    // Curves Resolve Stereo 를 요청했는데 Magma Lil Tube Stereo 로 보고한다.
-    // 즉시 재시도(4회)·메시지 루프 진입 후 지연 복원 모두 효과 없었고, 같은
-    // desc 로 브라우저에서 추가하면 정상이다 — **원인 미확정**.
-    // 로드 자체는 성공하므로 체인에는 넣되 경고로 표면화한다.
-    if (displayName.isNotEmpty()
-        && ! inst->getName().trim().equalsIgnoreCase (displayName.trim()))
-        err = u8 ("⚠ 이름 불일치 — 요청: ") + displayName
-              + u8 (" / 인스턴스 보고: ") + inst->getName()
-              + u8 (" (로드는 진행했습니다. 소리가 다르면 지우고 다시 추가하세요.)");
 
     inst->setPlayConfigDetails (2, 2, sr, bs);
 
@@ -287,9 +228,6 @@ std::shared_ptr<ChannelStrip::Node> ChannelStrip::makeNode (const juce::String& 
     // 폴백으로 찾았으면 로컬 경로로 자기치유 — 다음 저장부터 이 머신 경로가 기록됨.
     node->filePath = desc.fileOrIdentifier.isNotEmpty() ? desc.fileOrIdentifier : path;
     node->uid = desc.uniqueId != 0 ? desc.uniqueId : desc.deprecatedUid;
-    // 요청한 desc 의 이름을 보관 — UI 표시와 세션 저장의 기준. getName() 은
-    // 위 주석대로 신뢰할 수 없어 세션 조회 키로 쓰면 오염이 누적된다.
-    node->descName = desc.name.isNotEmpty() ? desc.name : node->plugin->getName();
     node->bypassed.store (bypass, std::memory_order_relaxed);
     return node;
 }
@@ -354,14 +292,10 @@ void ChannelStrip::loadChain (const juce::var& pluginsArray, float gainDb, juce:
             const auto pname = e.getProperty ("name", "").toString();
 
             juce::String err;
-            auto n = makeNode (path, byp, state, err, uid, pname);
-
-            // err 는 실패뿐 아니라 "로드했지만 이상함" 경고로도 채워진다.
-            if (err.isNotEmpty())
-                errors.add (err);
-
-            if (n != nullptr)
+            if (auto n = makeNode (path, byp, state, err, uid, pname))
                 newList.push_back (std::move (n));
+            else
+                errors.add (err);
         }
     }
 
@@ -385,7 +319,7 @@ int ChannelStrip::getNumPlugins() const
 juce::String ChannelStrip::getPluginName (int index) const
 {
     if (index >= 0 && index < (int) editList.size() && editList[(size_t) index]->plugin != nullptr)
-        return editList[(size_t) index]->descName;
+        return editList[(size_t) index]->plugin->getName();
     return {};
 }
 
@@ -419,7 +353,7 @@ juce::var ChannelStrip::getStateVar()
         auto* p = new juce::DynamicObject();
         p->setProperty ("path",   n->filePath);
         p->setProperty ("uid",    n->uid);                    // 머신 독립 식별자 (경로 폴백용)
-        p->setProperty ("name",   n->descName);                // 복원 조회 키 + 에러 표시용
+        p->setProperty ("name",   n->plugin->getName());      // 폴백 실패 시 에러 표시용
         p->setProperty ("bypass", n->bypassed.load (std::memory_order_relaxed));
 
         juce::MemoryBlock mb;

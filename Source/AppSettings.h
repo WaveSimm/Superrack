@@ -27,7 +27,7 @@ public:
     juce::StringArray vst3ExtraPaths() const;
     void setVst3ExtraPaths (const juce::StringArray& paths);
 
-    //== 병렬 DSP 워커 수 (0 = 자동 = 물리코어-3, 재시작 후 적용) ===============
+    //== 병렬 DSP 워커 수 (0 = 자동: 윈도우 물리코어-3 / 맥 성능코어-2, 재시작 적용) ==
     int  workerCountOverride() const { return (int) root.getProperty ("workerCount", 0); }
     void setWorkerCountOverride (int n);
 

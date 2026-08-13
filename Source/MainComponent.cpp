@@ -97,7 +97,11 @@ public:
 
         // ── 병렬 워커 수 ──
         initLabel (workerTitle, u8 ("병렬 DSP 워커 수 (재시작 후 적용)"));
+       #if JUCE_MAC
+        workerCombo.addItem (u8 ("자동 (성능코어-2)"), 1);
+       #else
         workerCombo.addItem (u8 ("자동 (물리코어-3)"), 1);
+       #endif
         for (int n = 1; n <= 6; ++n)
             workerCombo.addItem (juce::String (n), n + 1);
         workerCombo.onChange = [this]

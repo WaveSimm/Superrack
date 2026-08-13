@@ -17,9 +17,16 @@ FetchContent_MakeAvailable(JUCE)
 set(ASIO_SDK_DIR "" CACHE PATH "Steinberg ASIO SDK 의 common 폴더 (asio.h 위치)")
 
 # ── GUI 앱 타깃 ───────────────────────────────────────────────────────────────
+# macOS: MICROPHONE_PERMISSION_* 가 Info.plist 의 NSMicrophoneUsageDescription 을
+# 만든다. 이게 없으면 Tahoe(macOS 26) 에서 CoreAudio 입력 장치를 열 때 TCC 가
+# 앱을 종료시키거나 무음을 준다 — 맥 녹음 실패의 근본 원인. BUNDLE_ID 는 TCC 승인이
+# 재빌드마다 초기화되지 않도록 고정한다.
 juce_add_gui_app(Superrack
     PRODUCT_NAME "Superrack"
-    COMPANY_NAME "Superrack")
+    COMPANY_NAME "Superrack"
+    BUNDLE_ID "com.superrack.Superrack"
+    MICROPHONE_PERMISSION_ENABLED TRUE
+    MICROPHONE_PERMISSION_TEXT "Superrack 는 오디오 인터페이스 입력 채널을 처리·녹음하기 위해 오디오 입력 접근이 필요합니다.")
 
 target_sources(Superrack PRIVATE
     Source/Main.cpp
@@ -77,6 +84,9 @@ target_link_libraries(Superrack PRIVATE
 juce_add_gui_app(SuperrackBeta
     PRODUCT_NAME "Superrack Beta"
     COMPANY_NAME "Superrack"
+    BUNDLE_ID "com.superrack.SuperrackBeta"
+    MICROPHONE_PERMISSION_ENABLED TRUE
+    MICROPHONE_PERMISSION_TEXT "Superrack 는 오디오 인터페이스 입력 채널을 처리·녹음하기 위해 오디오 입력 접근이 필요합니다."
     EXCLUDE_FROM_ALL TRUE)
 
 target_sources(SuperrackBeta PRIVATE

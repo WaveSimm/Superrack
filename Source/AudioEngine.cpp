@@ -814,7 +814,12 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 
     // A3: 잡 처리 시간이 블록 예산을 넘는 블록을 스파이크로 캡처.
     if (sr > 0.0 && bs > 0)
+    {
         workerPool.setSpikeThresholdUs ((juce::uint32) (bs * 1.0e6 / sr));
+
+        // macOS: 워커를 이 블록 예산의 데드라인(time-constraint) 스레드로 승격.
+        workerPool.setRealtimeBlockTiming (sr, bs);
+    }
 
     for (auto& s : strips)
         s->prepare (sr, bs);

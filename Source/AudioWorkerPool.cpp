@@ -8,11 +8,15 @@
 #endif
 
 #if JUCE_INTEL
- #include <immintrin.h>   // _mm_pause (x86 전용 — arm64 맥에서는 yield 사용)
+ #include <immintrin.h>   // _mm_pause (x86 전용)
 #endif
 
 #if JUCE_MAC
  #include <pthread.h>
+ #include <sys/sysctl.h>
+ #include <mach/mach.h>
+ #include <mach/mach_time.h>
+ #include <mach/thread_policy.h>
 #endif
 
 namespace
@@ -21,10 +25,63 @@ namespace
     {
        #if JUCE_INTEL
         _mm_pause();
+       #elif defined (__aarch64__) || defined (__arm64__)
+        // arm64: YIELD 는 Apple 코어에서 사실상 no-op 이고 std::this_thread::yield 는
+        // 커널 진입(수 µs)이라 RT 스핀에 부적합. ISB 가 파이프라인을 비워
+        // 스핀 전력/코어 경쟁을 낮춘다 (x86 PAUSE 대응 관용구).
+        __asm__ __volatile__ ("isb sy" ::: "memory");
        #else
         std::this_thread::yield();
        #endif
     }
+
+   #if JUCE_MAC
+    /** Apple Silicon 의 성능(P) 코어 수. Intel 맥/조회 실패 시 물리 코어 수. */
+    int getPerformanceCoreCount()
+    {
+        int n = 0;
+        size_t sz = sizeof (n);
+
+        // perflevel0 = 최고 성능 레벨(M1: P코어 4). E코어는 perflevel1.
+        if (sysctlbyname ("hw.perflevel0.physicalcpu", &n, &sz, nullptr, 0) == 0 && n > 0)
+            return n;
+
+        return juce::SystemStats::getNumPhysicalCpus();
+    }
+
+    /** ns → mach absolute time 틱. */
+    juce::uint32 nsToMachTicks (double ns)
+    {
+        static mach_timebase_info_data_t tb = ([]
+        {
+            mach_timebase_info_data_t t {};
+            mach_timebase_info (&t);
+            if (t.numer == 0 || t.denom == 0) { t.numer = 1; t.denom = 1; }
+            return t;
+        })();
+
+        return (juce::uint32) juce::jmax (1.0, ns * (double) tb.denom / (double) tb.numer);
+    }
+
+    /** 호출 스레드를 오디오 데드라인 스레드로 승격 (THREAD_TIME_CONSTRAINT_POLICY).
+
+        QoS(USER_INTERACTIVE) 만으로는 스케줄러가 워커를 효율(E) 코어에 올릴 수 있고
+        데드라인 보장도 없다. time-constraint 정책은 P코어 배치 + 블록 예산 기반
+        선점 규칙을 준다 — CoreAudio 자체 IO 스레드와 같은 계열. */
+    bool applyTimeConstraintPolicy (double periodNs)
+    {
+        thread_time_constraint_policy_data_t p {};
+        p.period      = nsToMachTicks (periodNs);
+        p.computation = nsToMachTicks (periodNs * 0.5);    // 워커가 쓰는 예상 시간
+        p.constraint  = nsToMachTicks (periodNs * 0.85);   // 데드라인
+        p.preemptible = 0;                                 // 데드라인 스레드 = 비선점
+
+        return thread_policy_set (pthread_mach_thread_np (pthread_self()),
+                                  THREAD_TIME_CONSTRAINT_POLICY,
+                                  (thread_policy_t) &p,
+                                  THREAD_TIME_CONSTRAINT_POLICY_COUNT) == KERN_SUCCESS;
+    }
+   #endif
 
     // 게이트 오픈 감지용 스핀 횟수 — 대략 수십 µs. 그 안에 다음 블록이 안 오면
     // 이벤트 대기로 내려가 코어를 놓아준다 (spin → event, 리서치 §3).
@@ -45,8 +102,19 @@ AudioWorkerPool::AudioWorkerPool()
     useMmcss = juce::SystemStats::getEnvironmentVariable ("SUPERRACK_MMCSS", "") == "1";
 
     // 오디오 스레드 1 + 잔여 2코어(GUI/Writer/플러그인 백그라운드/OS) → 나머지가 워커.
+   #if JUCE_MAC
+    // macOS/Apple Silicon: 물리 코어 수(M1 = 8)를 그대로 쓰면 안 된다 — 그중 4개는
+    // 효율(E) 코어로 오디오 블록 데드라인을 못 맞춘다. 실효 병렬도는 P코어 수.
+    // 또 macOS 는 저QoS 스레드(GUI/디스크/스캔)를 알아서 E코어로 밀어내므로
+    // Windows 의 "여유 2코어"(A3) 대신 P코어 1개만 남겨도 된다 → P − 2.
+    //   M1(P4)  → 워커 2 (오디오 1 + 워커 2 = P코어 3/4 사용, 1개 여유)
+    //   M1 Pro/Max(P8) → 워커 6(상한)
+    const int cores = getPerformanceCoreCount();
+    int numWorkers = juce::jlimit (0, 6, cores - 2);
+   #else
     const int cores = juce::SystemStats::getNumPhysicalCpus();
     int numWorkers = juce::jlimit (0, 6, cores - 3);
+   #endif
 
     // 우선순위: 환경변수(진단) > 앱 설정(0=자동) > 자동.
     if (const int s = AppSettings::get().workerCountOverride(); s > 0)
@@ -194,6 +262,19 @@ void AudioWorkerPool::processJobs (const Job* jobList, int numJobs) noexcept
 }
 
 //==============================================================================
+void AudioWorkerPool::setRealtimeBlockTiming (double sampleRate, int blockSize) noexcept
+{
+    if (sampleRate <= 0.0 || blockSize <= 0)
+        return;
+
+    rtPeriodNs.store ((double) blockSize * 1.0e9 / sampleRate, std::memory_order_release);
+    rtPolicyGen.fetch_add (1, std::memory_order_release);
+
+    for (auto& w : workers)
+        w->wake.signal();   // 스핀 중이 아니라 자고 있어도 즉시 적용되게
+}
+
+//==============================================================================
 void AudioWorkerPool::workerLoop (Worker& self, int workerIndex)
 {
    #if JUCE_WINDOWS
@@ -205,13 +286,25 @@ void AudioWorkerPool::workerLoop (Worker& self, int workerIndex)
         AvSetMmThreadCharacteristicsW (L"Pro Audio", &mmcssTaskIndex);
     }
    #elif JUCE_MAC
-    // macOS: 워커를 최고 QoS 클래스로 — CoreAudio 스레드급은 아니지만
-    // 스핀-대기 워커에 충분. (time-constraint policy 는 추후 튜닝 여지)
+    // 장치가 열리기 전(블록 주기 미확정)에는 QoS 만. 장치 시작 시
+    // setRealtimeBlockTiming 이 세대를 올리면 아래 루프에서 time-constraint 로 승격.
     pthread_set_qos_class_self_np (QOS_CLASS_USER_INTERACTIVE, 0);
+    juce::uint32 appliedPolicyGen = 0;
    #endif
 
     while (! shouldExit.load (std::memory_order_acquire))
     {
+       #if JUCE_MAC
+        if (const auto gen = rtPolicyGen.load (std::memory_order_acquire);
+            gen != appliedPolicyGen)
+        {
+            appliedPolicyGen = gen;
+
+            if (const double ns = rtPeriodNs.load (std::memory_order_acquire); ns > 0.0)
+                applyTimeConstraintPolicy (ns);
+        }
+       #endif
+
         drainJobs (workerIndex);
 
         // 다음 블록 대기: 짧은 스핀(게이트 오픈 감지) → 이벤트 대기.

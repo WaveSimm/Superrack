@@ -18,6 +18,14 @@
     - 대기 전략 = 짧은 spin → 이벤트 대기 (1ms 예산에서 웨이크업 비용 최소화)
     - 워커 = TIME_CRITICAL 만 (A3 실측: MMCSS 등록 시 예약 윈도 스로틀 ~2.3ms 스톨)
     - 워커 수 = 물리코어 − 3 (A3 실측: 잔여 1코어면 저순위 스레드 굶음 → 10~28ms 스톨)
+
+    macOS/Apple Silicon 차이:
+    - 물리 코어 수 ≠ 실효 병렬도. E(효율) 코어는 블록 데드라인을 못 맞추므로
+      워커 수는 **성능(P) 코어 − 2** (`hw.perflevel0.physicalcpu`). 여유를 1코어만
+      두는 이유 = macOS 가 저QoS 스레드를 자동으로 E코어에 배치해 준다.
+    - 워커 승격 = THREAD_TIME_CONSTRAINT_POLICY (블록 주기 기준). QoS 만으로는
+      E코어 배치·데드라인 보장이 안 된다 → `setRealtimeBlockTiming()` 참조.
+    - 스핀 힌트 = arm64 `isb`(x86 `pause` 대응). `std::this_thread::yield` 금지.
     - 범용 태스크 라이브러리(taskflow 등)는 RT 보장이 없어 배제
 
     동기화 (무락, 콜백 내 무할당):
@@ -49,6 +57,11 @@ public:
     bool isEnabled() const noexcept   { return enabled.load (std::memory_order_relaxed); }
 
     int getNumWorkers() const noexcept { return (int) workers.size(); }
+
+    /** 장치 시작 시(오디오 콜백 전, 메시지 스레드) 블록 주기를 알려준다.
+        macOS 워커는 이 예산으로 time-constraint 정책을 (재)적용해 P코어 데드라인
+        스레드가 된다. Windows/기타 OS 에서는 값만 보관하고 동작 없음. */
+    void setRealtimeBlockTiming (double sampleRate, int blockSize) noexcept;
 
     /** 잡 전부 완료까지 반환하지 않는다(오디오 스레드 전용, 무할당). */
     void processJobs (const Job* jobList, int numJobs) noexcept;
@@ -116,6 +129,12 @@ private:
     std::atomic<juce::uint32> snapWorstUs { 0 };
     std::atomic<juce::uint32> snapSeq { 0 };     // 짝수 = 안정, 홀수 = 쓰는 중
     SpikeSnapshot snap;
+
+    // ── macOS RT 정책 ──
+    // 장치 시작마다 세대를 올리면 각 워커가 자기 스레드에서 정책을 재적용한다
+    // (thread_policy_set 은 대상 스레드에서 호출하는 것이 가장 단순·안전).
+    std::atomic<double>       rtPeriodNs  { 0.0 };
+    std::atomic<juce::uint32> rtPolicyGen { 0 };
 
     std::atomic<bool> enabled    { true };
     std::atomic<bool> shouldExit { false };

@@ -24,6 +24,82 @@ private:
 //==============================================================================
 /** 진행바 위 녹음/펀치 구간 오버레이 — 마우스 통과, 페인트 전용 (백로그 E).
     각 record/punch 이력 구간을 하단 밴드로 표시, 마지막 커밋은 주황 강조. */
+/** 진행바 위에 겹쳐 놓는 반복 구간 오버레이 (가상 리허설).
+
+    진행바와 **같은 좌표계**를 써야 "반복 구간이 녹음 구간의 어디쯤인지"가 바로
+    읽힌다. 그래서 별도 줄이 아니라 슬라이더와 같은 bounds 에 올리고,
+    hitTest 로 **위쪽 밴드에서만** 마우스를 받는다 — 아래쪽은 그대로 통과해
+    기존 시크(네비게이션)가 동작한다.
+
+    위 밴드를 드래그하면 구간을 새로 잡고, 양 끝 핸들을 끌면 조정, 더블클릭이면 해제.
+    드래그 중에는 표시만 갱신하고 엔진에는 **드래그가 끝날 때 한 번** 반영한다 —
+    구간이 바뀔 때마다 리필을 강제하면 끄는 소리가 난다. */
+class LoopRangeStrip : public juce::Component
+{
+public:
+    std::function<void (double startSec, double endSec)> onRangeChanged;
+
+    void setTotalSeconds (double s)
+    {
+        if (std::abs (s - totalSec) < 1.0e-9)
+            return;
+        totalSec = s;
+        repaint();
+    }
+
+    void setRange (double s, double e)
+    {
+        if (dragMode != DragMode::none)
+            return;   // 사용자가 잡고 있는 동안은 외부 갱신 무시
+        startSec = s; endSec = e;
+        repaint();
+    }
+
+    void setActive (bool b) { active = b; repaint(); }
+
+    bool hasRange() const noexcept { return endSec > startSec; }
+
+    /** 위쪽 밴드만 이 컴포넌트가 받는다. 나머지는 아래(진행바)로 통과 —
+        JUCE 는 hitTest 가 false 인 지점을 이 컴포넌트가 없는 것처럼 다룬다. */
+    bool hitTest (int x, int y) override;
+
+    void paint (juce::Graphics& g) override;
+    void mouseDown (const juce::MouseEvent& e) override;
+    void mouseDrag (const juce::MouseEvent& e) override;
+    void mouseUp   (const juce::MouseEvent& e) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
+
+private:
+    enum class DragMode { none, create, moveStart, moveEnd };
+
+    double xToSec (int x) const
+    {
+        if (totalSec <= 0.0 || getWidth() <= 0)
+            return 0.0;
+        return juce::jlimit (0.0, totalSec, (double) x / (double) getWidth() * totalSec);
+    }
+    float secToX (double s) const
+    {
+        if (totalSec <= 0.0)
+            return 0.0f;
+        return (float) (juce::jlimit (0.0, totalSec, s) / totalSec) * (float) getWidth();
+    }
+    void commit()
+    {
+        if (onRangeChanged != nullptr)
+            onRangeChanged (juce::jmin (startSec, endSec), juce::jmax (startSec, endSec));
+    }
+
+    double   totalSec = 0.0, startSec = 0.0, endSec = 0.0, anchorSec = 0.0;
+    bool     active = false;
+    DragMode dragMode = DragMode::none;
+
+    int bandHeight() const { return juce::jlimit (6, 12, getHeight() / 2); }
+
+    static constexpr int handlePx = 6;   // 끝 핸들 히트 영역(픽셀)
+};
+
+//==============================================================================
 class PunchStripOverlay : public juce::Component
 {
 public:
@@ -110,6 +186,8 @@ private:
     juce::Label        timeLabel;
     juce::Slider       positionSlider;
     PunchStripOverlay  punchOverlay;      // 진행바 위 녹음/펀치 구간 밴드
+    LoopRangeStrip     loopStrip;         // 진행바 위 반복 구간 지정 스트립
+    juce::TextButton   loopButton;        // 반복 on/off
     juce::ToggleButton throughChainToggle { juce::CharPointer_UTF8 ("재생 시 플러그인 통과") };
     juce::Label        recordLabel;        // 녹음 상태(폴더/드롭)
     bool               seeking = false;

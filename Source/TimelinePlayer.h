@@ -47,6 +47,15 @@ public:
     juce::int64  getPosition() const noexcept { return playPos.load (std::memory_order_relaxed); }
     void         setPosition (juce::int64 s);  // 시크 (리필 완료까지 ≤50ms 대기)
 
+    /** 구간 반복 (가상 리허설). 리더가 loopEnd 에서 loopStart 로 되감아 **연속
+        생산**하므로 경계에서 끊김·시크 대기가 없다. 오디오 스레드는 같은 경계로
+        재생 위치만 되감는다.
+        재생 중 경계를 바꾸면 이미 버퍼에 들어간 뒤쪽 오디오가 먼저 나가므로,
+        호출자는 드래그 종료 시점에 한 번만 호출하고 필요하면 setPosition 으로
+        리필을 강제한다. start>=end 이거나 enabled=false 면 반복 없음. */
+    void setLoop (bool enabled, juce::int64 startSample, juce::int64 endSample);
+    bool isLoopEnabled() const noexcept { return loopOn.load (std::memory_order_relaxed); }
+
     /** 오디오 스레드가 FIFO 를 못 채워 무음을 낸 블록 수 (GUI 표면화용). */
     int getUnderrunCount() const noexcept { return underruns.load (std::memory_order_relaxed); }
 
@@ -67,6 +76,8 @@ private:
     std::vector<juce::LagrangeInterpolator> interps;
     juce::AudioBuffer<float> inputTemp;  // 리샘플 입력 스크래치 (리더 전용)
     juce::int64 fileReadPos   = 0;       // 파일 샘플 도메인
+    juce::int64 producedPos   = 0;       // 생산 위치(출력 도메인, 절대 타임라인). 반복 시
+                                         // fileReadPos 로 역산할 수 없어 별도로 센다.
     juce::int64 fileTotal     = 0;
     double      ratio         = 1.0;     // 파일 샘플 / 장치 샘플
     bool        streamActive  = false;   // 리더가 refill 해도 되는가
@@ -95,6 +106,11 @@ private:
     std::atomic<juce::int64> playPos { 0 };       // 장치 샘플 도메인
     std::atomic<int>         underruns { 0 };
     std::atomic<bool>        eofReached { false };
+
+    // ── 구간 반복 (오디오·리더 양쪽이 같은 경계로 되감아야 위치가 어긋나지 않는다) ──
+    std::atomic<bool>        loopOn    { false };
+    std::atomic<juce::int64> loopStart { 0 };
+    std::atomic<juce::int64> loopEnd   { 0 };
 
     int         numCh = 0;
     double      outSr = 48000.0, fileSr = 48000.0;

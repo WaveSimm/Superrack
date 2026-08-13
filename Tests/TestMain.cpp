@@ -272,6 +272,74 @@ static juce::int64 consumeAndVerify (TimelinePlayer& p, int block, juce::int64 u
     return pos;
 }
 
+
+//==============================================================================
+// 구간 반복: 생산(리더)과 소비(오디오)가 **같은 경계**로 되감아야 한다.
+// 어긋나면 표시 위치와 실제 소리가 벌어지므로 내용까지 대조한다.
+static void testTimelinePlayerLoop (const juce::File& sandbox)
+{
+    section ("TimelinePlayer 구간 반복");
+    const auto dir = sandbox.getChildFile ("stems_loop");
+    const int N = 48000;
+    EXPECT (writeWav (dir.getChildFile ("ch01_dry.wav"), makeRamp (N), 48000.0));
+
+    TimelinePlayer p;
+    juce::String err;
+    EXPECT (p.load (dir, 512, 48000.0, err));
+
+    const juce::int64 A = 10000, B = 18000;
+    p.setLoop (true, A, B);
+    p.setPosition (A);
+    EXPECT (p.isLoopEnabled());
+    EXPECT (p.getPosition() == A);
+
+    juce::int64 logical = A;      // 되감기를 반영한 기대 위치
+    int bad = 0, wraps = 0, idle = 0, outOfRange = 0;
+
+    for (int blk = 0; blk < 400 && idle < 200; ++blk)
+    {
+        p.readBlock (512);
+        const auto now = p.getPosition();
+
+        if (now < A || now >= B)
+            ++outOfRange;
+
+        const int consumed = (int) (now >= logical ? now - logical
+                                                   : (B - logical) + (now - A));
+        if (consumed == 0) { ++idle; juce::Thread::sleep (1); continue; }
+        idle = 0;
+
+        const float* d = p.getChannel (0);
+        for (int i = 0; i < consumed; ++i)
+        {
+            auto expected = logical + i;
+            if (expected >= B) expected = A + (expected - B);
+            if (d[i] != rampValue (expected))
+                ++bad;
+        }
+
+        if (now < logical) ++wraps;
+        logical = now;
+    }
+
+    EXPECT (bad == 0);            // 위치와 소리가 끝까지 일치
+    EXPECT (outOfRange == 0);     // 구간 밖으로 나가지 않음
+    EXPECT (wraps >= 2);          // 8000 샘플 구간을 400블록(=204800) 소비 → 여러 번 되감김
+
+    // ── 반복 해제 → 구간 끝을 넘어 계속 진행 ──
+    p.setLoop (false, A, B);
+    EXPECT (! p.isLoopEnabled());
+    p.setPosition (B - 1000);
+    int bad2 = 0;
+    const auto endPos = consumeAndVerify (p, 512, B + 4000, 0, bad2);
+    EXPECT (bad2 == 0);
+    EXPECT (endPos >= B + 4000);  // 경계를 넘어 진행
+
+    // ── 잘못된 구간(끝<=시작)은 반복 없음으로 취급 ──
+    p.setLoop (true, 5000, 5000);
+    EXPECT (! p.isLoopEnabled());
+}
+
 static void testTimelinePlayer (const juce::File& sandbox)
 {
     section ("TimelinePlayer (스트리밍/시크/리샘플/EOF)");
@@ -536,6 +604,7 @@ int main()
     testRecorder (sandbox);
     testTakeManager (sandbox);
     testTimelinePlayer (sandbox);
+    testTimelinePlayerLoop (sandbox);
     testWorkerPool();
     testBetaGate();                 // 순수 판정만 — checkAndTouch 는 실제 APPDATA/레지스트리를 써서 제외
 

@@ -90,6 +90,16 @@ public:
     double getTimelineLengthSeconds() const;   // 전체 길이(초)
     bool   isTakeLoaded() const noexcept { return player.isLoaded(); }
 
+    //== 구간 반복 (가상 리허설) ==============================================
+    /** 반복 구간 설정(초). end<=start 면 구간 없음 = 반복 꺼짐.
+        재생 중 호출하면 현재 위치가 구간 밖일 때만 구간 시작으로 점프한다. */
+    void   setLoopRange (double startSec, double endSec);
+    void   setLoopEnabled (bool b);
+    bool   isLoopEnabled()      const noexcept { return loopEnabled; }
+    bool   hasLoopRange()       const noexcept { return loopEndSec > loopStartSec; }
+    double getLoopStartSeconds() const noexcept { return loopStartSec; }
+    double getLoopEndSeconds()   const noexcept { return loopEndSec; }
+
     /** 재생 시 채널 VST3 체인 통과 여부(옵션). */
     void setPlaybackThroughChain (bool b) noexcept { playThroughChain.store (b, std::memory_order_relaxed); }
     bool isPlaybackThroughChain() const noexcept   { return playThroughChain.load (std::memory_order_relaxed); }
@@ -185,6 +195,12 @@ private:
     void applySessionVar (const juce::var& root, juce::StringArray& errors);
 
     int lastChannelCount = -1;   // 변화 감지용 (메시지 스레드)
+
+    // 구간 반복 (메시지 스레드 소유 — player 로 내려보내는 값의 원본)
+    bool   loopEnabled  = false;
+    double loopStartSec = 0.0;
+    double loopEndSec   = 0.0;
+    void   applyLoopToPlayer();
 
     juce::AudioDeviceManager        deviceManager;
     juce::AudioPluginFormatManager  formatManager;

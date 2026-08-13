@@ -84,6 +84,7 @@ bool TimelinePlayer::load (const juce::File& dir, int blockSize, double deviceSa
                            false, false, true);
 
         fileReadPos  = 0;
+        producedPos  = 0;
         producedAll  = false;
         streamActive = true;
     }
@@ -144,6 +145,28 @@ void TimelinePlayer::setPosition (juce::int64 s)
 
 //==============================================================================
 // 오디오 스레드 — FIFO 소비만. 락·디스크·할당 없음.
+void TimelinePlayer::setLoop (bool enabled, juce::int64 startSample, juce::int64 endSample)
+{
+    const auto total = totalSamples;
+    auto s = juce::jlimit ((juce::int64) 0, total, startSample);
+    auto e = juce::jlimit ((juce::int64) 0, total, endSample);
+    const bool ok = enabled && e > s;
+
+    // 경계를 먼저 싣고 플래그를 나중에 켜야, 오디오 스레드가 반쯤 갱신된 구간을
+    // 보고 엉뚱한 위치로 되감지 않는다(끌 때는 반대 순서).
+    if (! ok)
+    {
+        loopOn.store (false, std::memory_order_release);
+        loopStart.store (s, std::memory_order_relaxed);
+        loopEnd.store   (e, std::memory_order_relaxed);
+        return;
+    }
+
+    loopStart.store (s, std::memory_order_relaxed);
+    loopEnd.store   (e, std::memory_order_relaxed);
+    loopOn.store    (true, std::memory_order_release);
+}
+
 void TimelinePlayer::readBlock (int numSamples) noexcept
 {
     fence.bump();   // unload 가드용 콜백 세대 기록
@@ -184,7 +207,18 @@ void TimelinePlayer::readBlock (int numSamples) noexcept
         underruns.fetch_add (1, std::memory_order_relaxed);   // 디스크 지연 — 무음으로 대기
     }
 
-    playPos.fetch_add (avail, std::memory_order_relaxed);
+    // 생산 측(fillChunk)이 loopEnd 에서 loopStart 로 되감으므로 소비 위치도 같은
+    // 규칙으로 되감아야 표시 위치와 실제 오디오가 어긋나지 않는다.
+    auto pos = playPos.load (std::memory_order_relaxed) + avail;
+    if (loopOn.load (std::memory_order_relaxed))
+    {
+        const auto ls = loopStart.load (std::memory_order_relaxed);
+        const auto le = loopEnd.load   (std::memory_order_relaxed);
+        if (le > ls && pos >= le)
+            pos = ls + (pos - le) % (le - ls);
+    }
+    playPos.store (pos, std::memory_order_relaxed);
+
     wakeReader.signal();   // 리필 촉구 (SetEvent ~1µs)
 }
 
@@ -234,6 +268,7 @@ void TimelinePlayer::handleSeek()
         for (auto& ip : interps)
             ip.reset();
         fileReadPos = (juce::int64) std::llround ((double) pendingSeek * ratio);
+        producedPos = pendingSeek;
         producedAll = false;
 
         // 첫 청크 즉시 리필 — setPosition 대기가 이걸 기다린다.
@@ -262,11 +297,27 @@ bool TimelinePlayer::fillChunk (int outSamples)
     if (producedAll || readers.empty())
         return false;
 
-    // 남은 생산량 (출력 도메인) — total 까지 생산했으면 EOF 표시.
-    const juce::int64 producedSoFar = (juce::int64) std::llround ((double) fileReadPos / ratio);
-    const int n = (int) juce::jmin ((juce::int64) outSamples, totalSamples - producedSoFar);
+    // 남은 생산량 (출력 도메인). 반복 중이면 상한이 총길이가 아니라 loopEnd 다.
+    const bool        loop  = loopOn.load (std::memory_order_relaxed);
+    const juce::int64 ls    = loopStart.load (std::memory_order_relaxed);
+    const juce::int64 le    = loopEnd.load   (std::memory_order_relaxed);
+    const bool        loopOk = loop && le > ls;
+    const juce::int64 limit = loopOk ? juce::jmin (le, totalSamples) : totalSamples;
+
+    const int n = (int) juce::jmin ((juce::int64) outSamples, limit - producedPos);
     if (n <= 0)
     {
+        if (loopOk)
+        {
+            // 구간 끝 도달 — 시크(핸드셰이크·FIFO 리셋) 없이 읽기 위치만 되감는다.
+            // 오디오 스레드도 같은 경계로 playPos 를 되감으므로 위치가 유지된다.
+            producedPos = ls;
+            fileReadPos = (juce::int64) std::llround ((double) ls * ratio);
+            for (auto& ip : interps)
+                ip.reset();   // 불연속 지점 — 보간 상태를 끌고 가면 클릭이 난다
+            return true;      // 다음 호출에서 실제 생산
+        }
+
         producedAll = true;
         eofReached.store (true, std::memory_order_release);
         return false;
@@ -313,5 +364,6 @@ bool TimelinePlayer::fillChunk (int outSamples)
 
     fifo.finishedWrite (n);
     fileReadPos += usedIn;
+    producedPos += n;
     return true;
 }

@@ -158,6 +158,121 @@ private:
     std::unique_ptr<juce::FileChooser> chooser;
 };
 
+
+//==============================================================================
+// LoopRangeStrip — 진행바 위 반복 구간 지정
+//==============================================================================
+bool LoopRangeStrip::hitTest (int, int y)
+{
+    // 위쪽 밴드만 잡는다 — 아래는 진행바가 받아 시크(네비게이션)한다.
+    return y < bandHeight();
+}
+
+void LoopRangeStrip::paint (juce::Graphics& g)
+{
+    const auto band = getLocalBounds().withHeight (bandHeight()).toFloat();
+
+    // 드래그 가능한 띠임을 알리는 옅은 바탕 (진행바와 구분되는 최소 표시)
+    g.setColour (juce::Colours::white.withAlpha (0.05f));
+    g.fillRect (band);
+
+    if (totalSec <= 0.0)
+        return;
+
+    if (! hasRange())
+    {
+        g.setColour (juce::Colours::grey.withAlpha (0.55f));
+        g.setFont (juce::Font (juce::FontOptions (9.5f)));
+        g.drawText (juce::CharPointer_UTF8 ("드래그 = 반복 구간"),
+                    band.toNearestInt(), juce::Justification::centred, false);
+        return;
+    }
+
+    const auto x1 = secToX (juce::jmin (startSec, endSec));
+    const auto x2 = secToX (juce::jmax (startSec, endSec));
+    const auto w  = juce::jmax (2.0f, x2 - x1);
+
+    // 활성(반복 켜짐) = 초록, 꺼짐 = 회색 — 구간은 남아 있고 반복만 꺼진 상태를 구분한다.
+    const auto base = active ? juce::Colours::limegreen : juce::Colours::grey;
+
+    // 진행바 전체 높이에 옅은 기둥 — 구간이 재생 위치·녹음 구간의 어디인지 읽히게.
+    g.setColour (base.withAlpha (active ? 0.16f : 0.09f));
+    g.fillRect (x1, 0.0f, w, (float) getHeight());
+
+    // 위 밴드는 진하게 = 여기가 잡는 곳
+    g.setColour (base.withAlpha (active ? 0.70f : 0.35f));
+    g.fillRect (x1, band.getY(), w, band.getHeight());
+
+    g.setColour (base.withAlpha (0.95f));
+    g.fillRect (x1, 0.0f, 2.0f, (float) getHeight());
+    g.fillRect (x2 - 2.0f, 0.0f, 2.0f, (float) getHeight());
+}
+
+void LoopRangeStrip::mouseDown (const juce::MouseEvent& e)
+{
+    if (totalSec <= 0.0)
+        return;
+
+    if (hasRange())
+    {
+        const auto x1 = secToX (juce::jmin (startSec, endSec));
+        const auto x2 = secToX (juce::jmax (startSec, endSec));
+
+        if (std::abs ((float) e.x - x1) <= (float) handlePx)      { dragMode = DragMode::moveStart; return; }
+        if (std::abs ((float) e.x - x2) <= (float) handlePx)      { dragMode = DragMode::moveEnd;   return; }
+    }
+
+    // 새 구간 — 누른 지점을 기준점으로 잡고 드래그 방향에 따라 늘린다.
+    anchorSec = xToSec (e.x);
+    startSec = endSec = anchorSec;
+    dragMode = DragMode::create;
+    repaint();
+}
+
+void LoopRangeStrip::mouseDrag (const juce::MouseEvent& e)
+{
+    if (dragMode == DragMode::none)
+        return;
+
+    const auto s = xToSec (e.x);
+    switch (dragMode)
+    {
+        case DragMode::create:    startSec = juce::jmin (anchorSec, s); endSec = juce::jmax (anchorSec, s); break;
+        case DragMode::moveStart: startSec = s; break;
+        case DragMode::moveEnd:   endSec   = s; break;
+        default: break;
+    }
+    repaint();
+}
+
+void LoopRangeStrip::mouseUp (const juce::MouseEvent&)
+{
+    if (dragMode == DragMode::none)
+        return;
+
+    dragMode = DragMode::none;
+
+    // 클릭에 가까운 미세 드래그는 구간으로 치지 않는다(실수로 0길이 구간이 생김).
+    if (std::abs (endSec - startSec) < 0.05)
+    {
+        startSec = endSec = 0.0;
+        repaint();
+        commit();
+        return;
+    }
+
+    repaint();
+    commit();
+}
+
+void LoopRangeStrip::mouseDoubleClick (const juce::MouseEvent&)
+{
+    startSec = endSec = 0.0;
+    dragMode = DragMode::none;
+    repaint();
+    commit();
+}
+
 //==============================================================================
 // SettingsWindow — 장치 설정 + 앱 설정을 담는 별도 창
 //==============================================================================
@@ -365,6 +480,27 @@ MainComponent::MainComponent()
     addAndMakeVisible (positionSlider);
     addAndMakeVisible (punchOverlay);   // 슬라이더 뒤에 추가 = 위에 그려짐 (마우스 통과)
 
+    // ── 구간 반복 (가상 리허설) ──
+    loopButton.setButtonText (u8 ("\xe2\x86\xba 반복"));
+    loopButton.setClickingTogglesState (true);
+    loopButton.setColour (juce::TextButton::buttonOnColourId, juce::Colours::limegreen.darker (0.2f));
+    loopButton.setTooltip (u8 ("반복 구간을 지정한 뒤 켜면 그 구간만 되풀이 재생합니다."));
+    loopButton.onClick = [this]
+    {
+        engine.setLoopEnabled (loopButton.getToggleState());
+        loopStrip.setActive (loopButton.getToggleState() && engine.hasLoopRange());
+        notifySessionChanged();
+    };
+    addAndMakeVisible (loopButton);
+
+    loopStrip.onRangeChanged = [this] (double s, double e)
+    {
+        engine.setLoopRange (s, e);
+        loopStrip.setActive (loopButton.getToggleState() && engine.hasLoopRange());
+        notifySessionChanged();
+    };
+    addAndMakeVisible (loopStrip);
+
     throughChainToggle.setToggleState (engine.isPlaybackThroughChain(), juce::dontSendNotification);
     throughChainToggle.setColour (juce::ToggleButton::textColourId, juce::Colours::white);
     throughChainToggle.onClick = [this]
@@ -518,18 +654,21 @@ void MainComponent::resized()
 
     area.removeFromTop (6);
 
-    // 트랜스포트 행: ⏮ ⏭ ● ▶ ■  시간  [진행바]  [플러그인 통과]
+    // 트랜스포트 행: ⏮ ⏭ ● ▶ ■ ↺  시간  [진행바]  [플러그인 통과]
+    // 반복 구간은 별도 줄이 아니라 진행바 위에 겹친다(위 밴드만 마우스를 받음).
     auto tr = area.removeFromTop (30);
     rewindButton.setBounds (tr.removeFromLeft (38));  tr.removeFromLeft (4);
     toEndButton.setBounds  (tr.removeFromLeft (38));  tr.removeFromLeft (10);
     recordButton.setBounds (tr.removeFromLeft (38));  tr.removeFromLeft (4);
     playButton.setBounds   (tr.removeFromLeft (38));  tr.removeFromLeft (4);
-    stopButton.setBounds   (tr.removeFromLeft (38));  tr.removeFromLeft (10);
+    stopButton.setBounds   (tr.removeFromLeft (38));  tr.removeFromLeft (4);
+    loopButton.setBounds   (tr.removeFromLeft (72));  tr.removeFromLeft (10);
     timeLabel.setBounds    (tr.removeFromLeft (150)); tr.removeFromLeft (8);
     throughChainToggle.setBounds (tr.removeFromRight (170));  tr.removeFromRight (8);
     const auto sliderArea = tr.reduced (0, 4);
     positionSlider.setBounds (sliderArea);
     punchOverlay.setBounds (sliderArea);
+    loopStrip.setBounds (sliderArea);   // 같은 좌표계 — 구간·녹음구간·재생위치가 정렬된다
 
     area.removeFromTop (6);
 
@@ -685,6 +824,16 @@ void MainComponent::updateTransportUI()
                                  juce::dontSendNotification);
     }
     positionSlider.setEnabled (engine.isTakeLoaded() && ! rec);
+
+    // 반복 구간 스트립 — 길이·구간·활성 상태를 엔진에서 되읽는다(세션 복원 반영).
+    loopStrip.setTotalSeconds (len);
+    loopStrip.setRange (engine.getLoopStartSeconds(), engine.getLoopEndSeconds());
+    loopStrip.setActive (engine.isLoopEnabled() && engine.hasLoopRange());
+    loopStrip.setEnabled (engine.isTakeLoaded() && ! rec);
+    if (loopButton.getToggleState() != engine.isLoopEnabled())
+        loopButton.setToggleState (engine.isLoopEnabled(), juce::dontSendNotification);
+    loopButton.setEnabled (! rec);
+
     playButton.setEnabled (! rec);
     recordButton.setEnabled (! ply);
 

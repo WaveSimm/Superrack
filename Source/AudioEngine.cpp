@@ -279,10 +279,21 @@ bool AudioEngine::transportPlay (juce::String& error)
             return false;
     }
 
-    // playhead 부터 재생 (끝이면 처음부터).
+    applyLoopToPlayer();   // load 직후일 수 있으므로 매번 다시 내려보낸다
+
+    // playhead 부터 재생 (끝이면 처음부터). 반복 중이고 구간 밖이면 구간 시작부터.
     juce::int64 startPos = (juce::int64) (playheadSeconds * player.getSampleRate());
     if (startPos >= player.getTotalSamples())
         startPos = 0;
+
+    if (loopEnabled && hasLoopRange())
+    {
+        const auto ls = (juce::int64) std::llround (loopStartSec * player.getSampleRate());
+        const auto le = (juce::int64) std::llround (loopEndSec   * player.getSampleRate());
+        if (startPos < ls || startPos >= le)
+            startPos = ls;
+    }
+
     player.setPosition (startPos);
 
     transport.store (tsPlaying, std::memory_order_release);
@@ -353,6 +364,54 @@ void AudioEngine::setPlayPositionSeconds (double s)
     playheadSeconds = juce::jmax (0.0, s);
     if (player.isLoaded())
         player.setPosition ((juce::int64) (playheadSeconds * player.getSampleRate()));
+}
+
+void AudioEngine::applyLoopToPlayer()
+{
+    if (! player.isLoaded() || player.getSampleRate() <= 0.0)
+        return;
+
+    const double sr = player.getSampleRate();
+    player.setLoop (loopEnabled && hasLoopRange(),
+                    (juce::int64) std::llround (loopStartSec * sr),
+                    (juce::int64) std::llround (loopEndSec   * sr));
+}
+
+void AudioEngine::setLoopRange (double startSec, double endSec)
+{
+    // 정규화: 뒤집힌 드래그도 받아들인다.
+    if (endSec < startSec)
+        std::swap (startSec, endSec);
+
+    const double len = getTimelineLengthSeconds();
+    loopStartSec = juce::jlimit (0.0, juce::jmax (0.0, len), startSec);
+    loopEndSec   = juce::jlimit (0.0, juce::jmax (0.0, len), endSec);
+
+    applyLoopToPlayer();
+
+    // 재생 중 구간이 바뀌면 이미 버퍼에 찬 뒤쪽 오디오가 먼저 나간다.
+    // 현재 위치가 구간 밖이면 구간 시작으로 보내 리필까지 강제한다.
+    if (transport.load (std::memory_order_acquire) == tsPlaying
+        && loopEnabled && hasLoopRange())
+    {
+        const double now = getTimelineSeconds();
+        if (now < loopStartSec || now >= loopEndSec)
+            setPlayPositionSeconds (loopStartSec);
+    }
+}
+
+void AudioEngine::setLoopEnabled (bool b)
+{
+    loopEnabled = b;
+    applyLoopToPlayer();
+
+    if (b && hasLoopRange()
+        && transport.load (std::memory_order_acquire) == tsPlaying)
+    {
+        const double now = getTimelineSeconds();
+        if (now < loopStartSec || now >= loopEndSec)
+            setPlayPositionSeconds (loopStartSec);
+    }
 }
 
 void AudioEngine::syncPlayheadFromPlayer() noexcept
@@ -443,11 +502,27 @@ juce::var AudioEngine::getSessionVar()
         stripArr.add (v);
     }
     root->setProperty ("strips", stripArr);
+
+    // 구간 반복 — 리허설 구간은 세션의 일부다(다시 잡게 하면 번거롭다).
+    auto* lp = new juce::DynamicObject();
+    lp->setProperty ("enabled",  loopEnabled);
+    lp->setProperty ("startSec", loopStartSec);
+    lp->setProperty ("endSec",   loopEndSec);
+    root->setProperty ("loop", juce::var (lp));
+
     return juce::var (root);
 }
 
 void AudioEngine::applySessionVar (const juce::var& root, juce::StringArray& errors)
 {
+    if (const auto lp = root.getProperty ("loop", {}); lp.isObject())
+    {
+        loopStartSec = (double) lp.getProperty ("startSec", 0.0);
+        loopEndSec   = (double) lp.getProperty ("endSec",   0.0);
+        loopEnabled  = (bool)   lp.getProperty ("enabled",  false);
+        applyLoopToPlayer();
+    }
+
     if (auto* arr = root.getProperty ("strips", {}).getArray())
     {
         for (int ch = 0; ch < arr->size() && ch < (int) strips.size(); ++ch)

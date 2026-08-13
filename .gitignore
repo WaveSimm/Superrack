@@ -13,3 +13,4 @@ _deps/
 # IDE
 .vs/
 *.user
+.DS_Store

@@ -108,6 +108,9 @@ public:
     void deleteTake (const juce::File& takeDir);
     /** 테이크 목록/현재 테이크가 바뀌면 호출(메시지 스레드). */
     std::function<void()> onTakesChanged;
+    /** 세션 자동복원 완료(메시지 루프 진입 후 비동기 실행) — GUI 는 체인 행을
+        다시 그리고 getSessionRestoreErrors() 를 확인해야 한다. */
+    std::function<void()> onSessionRestored;
 
     // ── 녹음 undo/redo (1단계 — 커밋 직전 상태로 복구/재적용) ────────────────
     bool canUndoRecording() const { return currentTakeDir.isDirectory() && takeMgr.hasUndoState (currentTakeDir); }
@@ -160,6 +163,10 @@ public:
     /** 임의 .superrack 파일로 저장/로드 (수동). */
     bool saveSessionToFile (const juce::File& file);
     bool loadSessionFromFile (const juce::File& file, juce::StringArray& errors);
+    /** 기동 시 세션 자동복원에서 실패한 항목들(플러그인 미발견·로드 실패 등).
+        비어 있지 않으면 GUI 가 사용자에게 알려야 한다 — 조용히 삼키면 체인이
+        바뀐 채로 다음 자동 저장에 확정된다. */
+    const juce::StringArray& getSessionRestoreErrors() const noexcept { return sessionRestoreErrors; }
 
     //==========================================================================
     // AudioIODeviceCallback
@@ -185,6 +192,7 @@ private:
     void applySessionVar (const juce::var& root, juce::StringArray& errors);
 
     int lastChannelCount = -1;   // 변화 감지용 (메시지 스레드)
+    juce::StringArray sessionRestoreErrors;   // 기동 복원 실패 목록 (메시지 스레드)
 
     juce::AudioDeviceManager        deviceManager;
     juce::AudioPluginFormatManager  formatManager;
@@ -247,5 +255,6 @@ private:
     std::atomic<float> dspPeak     { 0.0f };
     std::atomic<int>   dspOverruns { 0 };      // 버퍼 예산 초과(load>1) 콜백 수
 
+    JUCE_DECLARE_WEAK_REFERENCEABLE (AudioEngine)
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioEngine)
 };

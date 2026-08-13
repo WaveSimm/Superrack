@@ -462,7 +462,7 @@ static void testPluginSystem (const juce::File& sandbox)
 {
     section ("PluginSystem (waves-shell-support)");
 
-    // ── pickByUid: 다중 클래스 목록에서 uid 선택 ─────────────────────────────
+    // ── pickByUid: 다중 클래스 목록에서 uid+이름으로 선택 ────────────────────
     std::vector<juce::PluginDescription> types;
     {
         juce::PluginDescription a; a.name = "SubA"; a.uniqueId = 111;
@@ -470,11 +470,24 @@ static void testPluginSystem (const juce::File& sandbox)
         types.push_back (a);
         types.push_back (b);
     }
-    EXPECT (ChannelStrip::pickByUid (types, 0)   == &types[0]);   // uid 미기록(구세션) → 첫 항목
-    EXPECT (ChannelStrip::pickByUid (types, 222) == &types[1]);   // uniqueId 일치
-    EXPECT (ChannelStrip::pickByUid (types, 22)  == &types[1]);   // deprecatedUid 일치
-    EXPECT (ChannelStrip::pickByUid (types, 999) == nullptr);     // 불일치 → 폴백 유도
-    EXPECT (ChannelStrip::pickByUid ({}, 0)      == nullptr);     // 빈 목록
+    EXPECT (ChannelStrip::pickByUid (types, 222, "SubB") == &types[1]);   // uid+이름 일치
+    EXPECT (ChannelStrip::pickByUid (types, 22,  "SubB") == &types[1]);   // deprecatedUid+이름
+    EXPECT (ChannelStrip::pickByUid (types, 999, "SubB") == &types[1]);   // uid 변경(쉘 버전업) → 이름으로
+    EXPECT (ChannelStrip::pickByUid (types, 222, {})     == &types[1]);   // 이름 미기록 구세션 → uid 만
+    EXPECT (ChannelStrip::pickByUid (types, 999, {})     == nullptr);     // 불일치 → 폴백 유도
+    EXPECT (ChannelStrip::pickByUid ({}, 0, {})          == nullptr);     // 빈 목록
+
+    // 핵심 회귀: uid 는 맞는데 이름이 다른 항목을 집으면 안 된다. JUCE 는
+    // 인스턴스화 때 이름까지 대조하므로, 여기서 uid 만 보고 고르면 WaveShell
+    // 에서 엉뚱한 서브플러그인이 조용히 로드된다.
+    EXPECT (ChannelStrip::pickByUid (types, 222, "Curves Resolve Stereo") == nullptr);
+
+    // 단서가 없으면 다중 클래스 파일에서 임의로 첫 항목을 집지 않는다.
+    EXPECT (ChannelStrip::pickByUid (types, 0, {}) == nullptr);
+    {
+        std::vector<juce::PluginDescription> single { types[0] };
+        EXPECT (ChannelStrip::pickByUid (single, 0, {}) == &single[0]);   // 단일 클래스만 허용
+    }
 
     // ── scanPath: 실패(부재) 결과도 캐시 — 반복 스캔 없음 ────────────────────
     juce::AudioPluginFormatManager fm;

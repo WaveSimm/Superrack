@@ -214,6 +214,22 @@ void SettingsWindow::closeButtonPressed()
 //==============================================================================
 MainComponent::MainComponent()
 {
+    // 세션 복원은 메시지 루프 진입 후 비동기로 끝난다(AudioEngine::initialise 참조).
+    // 완료 시 체인 행을 다시 그리고, 실패 항목이 있으면 알린다 — 조용히 넘기면
+    // 짧아진 체인으로 계속 쓰다가 다음 자동 저장에서 원본이 덮여 사라진다.
+    engine.onSessionRestored = [this]
+    {
+        rebuildChannelRows();
+
+        if (const auto& errs = engine.getSessionRestoreErrors(); ! errs.isEmpty())
+            juce::NativeMessageBox::showMessageBoxAsync (
+                juce::MessageBoxIconType::WarningIcon,
+                u8 ("세션 복원 — 일부 플러그인 실패"),
+                errs.joinIntoString ("\n")
+                    + u8 ("\n\n해당 슬롯은 비어 있습니다. 다시 추가하기 전에 저장하면"
+                          " 이 체인이 그대로 기록됩니다."));
+    };
+
     engine.initialise();
 
     // ── 툴바 ──
@@ -478,6 +494,7 @@ MainComponent::MainComponent()
     updateTransportUI();
     setSize (860, 630);
     startTimerHz (30);
+
 }
 
 MainComponent::~MainComponent()

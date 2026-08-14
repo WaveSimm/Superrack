@@ -306,6 +306,22 @@ bool AudioEngine::startPunchPass (juce::String& error)
 
     ensureCurrentTake();
 
+    // SR 불일치 가드: 커밋은 장치 SR 캡처를 테이크 파일에 그대로 이어붙이므로,
+    // 테이크 SR 이 다르면 구간 안 오디오의 피치/길이가 어긋난다(재생 리샘플과 달리
+    // 파일 병합은 보정 불가). 일반 재생은 리샘플로 허용되지만 펀치는 거부가 맞다.
+    {
+        const auto info = takeMgr.readTake (currentTakeDir);
+        const double devSr = getCurrentSampleRate();
+        if (info.env.sampleRate > 0.0 && devSr > 0.0
+            && std::abs (info.env.sampleRate - devSr) > 1.0)
+        {
+            error = u8 ("구간녹음은 테이크와 장치의 샘플레이트가 같아야 합니다 (테이크 ")
+                  + juce::String (info.env.sampleRate / 1000.0, 1) + u8 ("kHz / 장치 ")
+                  + juce::String (devSr / 1000.0, 1) + u8 ("kHz).");
+            return false;
+        }
+    }
+
     // 재생 준비 — 펀치 패스는 기존 오디오를 들으며 부르는 것이 본질이라 재생 가능해야 한다.
     if (! player.isLoaded())
     {

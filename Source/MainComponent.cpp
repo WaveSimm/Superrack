@@ -682,15 +682,26 @@ void MainComponent::timerCallback()
 
     updateTransportUI();
 
-    // DSP 부하(실측 avg/peak) / 장치 xrun 표시
+    // 세션 자동저장 디바운스 플러시 (notifySessionChanged 참조)
+    if (sessionDirty && juce::Time::getMillisecondCounter() >= sessionSaveDeadline)
+    {
+        sessionDirty = false;
+        engine.autoSaveSession();
+    }
+
+    // DSP 부하(실측 avg/peak) / 장치 xrun 표시 — 값이 안 변한 틱은 문자열 조립 생략
     const int xr = engine.getDeviceXRuns();
     const int dspAvg  = juce::roundToInt (engine.getDspLoadAvg()  * 100.0f);
     const int dspPeak = juce::roundToInt (engine.getDspLoadPeak() * 100.0f);
-    const bool warn = xr > 0 || dspPeak >= 95;
-    perfLabel.setColour (juce::Label::textColourId, warn ? juce::Colours::orange : juce::Colours::grey);
-    perfLabel.setText ("DSP " + juce::String (dspAvg) + "% (pk " + juce::String (dspPeak)
-                           + "%)   xrun " + juce::String (xr),
-                       juce::dontSendNotification);
+    if (xr != lastPerfXr || dspAvg != lastPerfAvg || dspPeak != lastPerfPeak)
+    {
+        lastPerfXr = xr; lastPerfAvg = dspAvg; lastPerfPeak = dspPeak;
+        const bool warn = xr > 0 || dspPeak >= 95;
+        perfLabel.setColour (juce::Label::textColourId, warn ? juce::Colours::orange : juce::Colours::grey);
+        perfLabel.setText ("DSP " + juce::String (dspAvg) + "% (pk " + juce::String (dspPeak)
+                               + "%)   xrun " + juce::String (xr),
+                           juce::dontSendNotification);
+    }
 
     // 레이턴시 측정 상태 변화 시 라벨 갱신
     const int state = engine.getLatencyState();
@@ -761,9 +772,14 @@ void MainComponent::updateTransportUI()
     playButton.setColour   (juce::TextButton::buttonColourId, (ply || pass) ? juce::Colours::darkgreen : defBtn);
 
     // 시간 표시 pos / len — 시크 드래그 중에는 엔진이 아니라 커서가 쥔 위치를 보여준다.
+    // 표시 정밀도(10ms) 이하로 안 변한 틱은 문자열 조립 생략.
     const double pos = seeking ? timeline.getPositionSeconds() : engine.getTimelineSeconds();
     const double len = engine.getTimelineLengthSeconds();
-    timeLabel.setText (fmtTime (pos) + " / " + fmtTime (len), juce::dontSendNotification);
+    if (std::abs (pos - lastTimePos) > 0.004 || std::abs (len - lastTimeLen) > 0.004)
+    {
+        lastTimePos = pos; lastTimeLen = len;
+        timeLabel.setText (fmtTime (pos) + " / " + fmtTime (len), juce::dontSendNotification);
+    }
 
     // 타임라인 — 길이/위치/반복 구간을 엔진에서 되읽는다(세션 복원 반영).
     // 커서는 드래그 중이면 뷰가 알아서 무시한다(사용자가 쥐고 있는 값이 우선).
@@ -887,7 +903,12 @@ void MainComponent::refreshTakes()
 //==============================================================================
 void MainComponent::notifySessionChanged()
 {
-    engine.autoSaveSession();
+    // 디바운스(분석 P1b): 즉시 저장하면 클릭/드래그마다 전 채널 플러그인 상태
+    // 덤프(getStateInformation) + 동기 파일 쓰기가 일어난다. 마지막 변경 후 1초에
+    // 한 번만 저장 — 플러시는 타이머(timerCallback)가, 종료 시엔 engine.shutdown()
+    // 이 무조건 저장하므로 유실 없음. 녹음 커밋도 세션을 직접 스냅샷한다.
+    sessionDirty = true;
+    sessionSaveDeadline = juce::Time::getMillisecondCounter() + 1000;
 }
 
 void MainComponent::showSessionMenu()

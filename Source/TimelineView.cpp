@@ -46,6 +46,22 @@ void TimelineView::setLengthSeconds (double s)
     repaint();
 }
 
+juce::Rectangle<int> TimelineView::cursorBounds() const
+{
+    const int x   = juce::roundToInt (secToX (posSec));
+    const int top = loopLane().getY();       // 커서 상단 = 루프 레인 가로줄
+    return { x - 6, top, 13, getHeight() - top };
+}
+
+void TimelineView::moveCursorTo (double s)
+{
+    // 재생 중 30Hz 틱마다 뷰 전체(룰러 라벨·클립·로케이터)를 다시 그리지 않도록
+    // 이전/새 커서 자리만 무효화한다 — VNC 같은 원격 화면에서 체감이 크다.
+    const auto oldR = cursorBounds();
+    posSec = s;
+    repaint (oldR.getUnion (cursorBounds()));
+}
+
 void TimelineView::setPositionSeconds (double s)
 {
     if (dragMode == Drag::seek)
@@ -53,8 +69,7 @@ void TimelineView::setPositionSeconds (double s)
     s = juce::jlimit (0.0, juce::jmax (0.0, totalSec), s);
     if (std::abs (s - posSec) < 1.0e-4)
         return;
-    posSec = s;
-    repaint();
+    moveCursorTo (s);
 }
 
 void TimelineView::setLoopRange (double s, double e)
@@ -284,10 +299,9 @@ void TimelineView::mouseDown (const juce::MouseEvent& e)
 
     // 룰러/클립 어디를 눌러도 커서가 그리로 와서 잡힌다.
     dragMode = Drag::seek;
-    posSec = xToSec ((float) e.x);
     if (onSeekDragChanged != nullptr)
         onSeekDragChanged (true);
-    repaint();
+    moveCursorTo (xToSec ((float) e.x));
 }
 
 void TimelineView::mouseDrag (const juce::MouseEvent& e)
@@ -296,10 +310,11 @@ void TimelineView::mouseDrag (const juce::MouseEvent& e)
         return;
 
     const double s = xToSec ((float) e.x);
+    lastMouse = e.getPosition();
 
     switch (dragMode)
     {
-        case Drag::seek:       posSec = s; break;
+        case Drag::seek:       moveCursorTo (s); return;   // 커서 자리만 무효화
         case Drag::loopCreate: loopStartSec = juce::jmin (anchorSec, s);
                                loopEndSec   = juce::jmax (anchorSec, s); break;
         case Drag::loopStart:  loopStartSec = s; break;
@@ -307,7 +322,6 @@ void TimelineView::mouseDrag (const juce::MouseEvent& e)
         default: break;
     }
 
-    lastMouse = e.getPosition();
     repaint();
 }
 

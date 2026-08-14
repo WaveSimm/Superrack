@@ -86,6 +86,11 @@ private:
     /** 마우스 x 아래의 클립 세그먼트 (없으면 -1). */
     int segmentAt (float x) const;
 
+    /** 커서(세로선+머리)가 차지하는 사각형 — 부분 repaint 용. */
+    juce::Rectangle<int> cursorBounds() const;
+    /** 커서만 움직였을 때: 이전+새 위치 사각형만 무효화 (30Hz 전체 리페인트 방지). */
+    void moveCursorTo (double s);
+
     double totalSec = 0.0, posSec = 0.0, loopStartSec = 0.0, loopEndSec = 0.0;
     bool   hasLoop() const noexcept { return loopEndSec > loopStartSec; }
 

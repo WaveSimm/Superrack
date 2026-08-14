@@ -88,6 +88,14 @@ private:
     juce::Array<juce::File> takePaths;   // combo id-1 → 폴더
     void refreshTakes();
 
+    // 세션 자동저장 디바운스 (notifySessionChanged 참조)
+    bool         sessionDirty = false;
+    juce::uint32 sessionSaveDeadline = 0;
+
+    // perfLabel/timeLabel 캐시 — 값이 안 변한 틱의 문자열 조립 생략
+    int    lastPerfXr = -1, lastPerfAvg = -1, lastPerfPeak = -1;
+    double lastTimePos = -1.0, lastTimeLen = -1.0;
+
     // 세로 스크롤 채널 랙
     juce::Viewport   channelViewport;
     juce::Component   channelContainer;      // ChannelRow 들의 부모

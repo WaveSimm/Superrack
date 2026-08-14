@@ -492,7 +492,8 @@ static void testTimelineSegments()
     section ("TimelineSegments — 구간 대체 스위프");
 
     // 변수명이 sr 이면 네임스페이스 sr:: 을 가린다.
-    constexpr double kSR = 48000.0;
+    // static: MSVC 는 constexpr 지역변수를 캡처 없는 람다에서 못 쓴다 (C3493).
+    static constexpr double kSR = 48000.0;
     auto smp = [] (double s) { return (juce::int64) (s * kSR); };
 
     auto entry = [&] (const char* op, double s, double e)

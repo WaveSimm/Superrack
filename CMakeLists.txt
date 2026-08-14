@@ -41,6 +41,7 @@ target_sources(Superrack PRIVATE
     Source/CpuProfiler.cpp
     Source/AudioWorkerPool.cpp
     Source/ChannelRow.cpp
+    Source/TimelineView.cpp
     Source/MainComponent.cpp)
 
 target_compile_features(Superrack PRIVATE cxx_std_17)
@@ -103,6 +104,7 @@ target_sources(SuperrackBeta PRIVATE
     Source/CpuProfiler.cpp
     Source/AudioWorkerPool.cpp
     Source/ChannelRow.cpp
+    Source/TimelineView.cpp
     Source/MainComponent.cpp)
 
 target_compile_features(SuperrackBeta PRIVATE cxx_std_17)

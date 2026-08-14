@@ -86,6 +86,9 @@ TakeManager::TakeInfo TakeManager::readTake (const juce::File& dir) const
                 he.startSample = (juce::int64) (double) e.getProperty ("startSample", 0.0);
                 he.endSample   = (juce::int64) (double) e.getProperty ("endSample", 0.0);
                 he.at          = e.getProperty ("at", "").toString();
+                if (auto* chs = e.getProperty ("channels", {}).getArray())
+                    for (auto& c : *chs)
+                        he.channels.add ((int) c);
                 t.history.add (he);
             }
         }
@@ -119,7 +122,9 @@ juce::Array<TakeManager::TakeInfo> TakeManager::listTakes() const
 //==============================================================================
 void TakeManager::commitRecording (const juce::File& takeDir, const juce::File& recTmp,
                                    juce::int64 punchSamples, const TakeEnv& env,
-                                   const juce::var& sessionSnapshot)
+                                   const juce::var& sessionSnapshot,
+                                   juce::int64 trimSamples, juce::uint32 armedMask,
+                                   juce::int64 srcOffsetSamples)
 {
     ensureFormats();
     const double sampleRate = env.sampleRate;
@@ -130,13 +135,48 @@ void TakeManager::commitRecording (const juce::File& takeDir, const juce::File& 
     if (newStems.isEmpty())
         return;
 
+    // armed 채널이 하나도 없으면 커밋 없음 — 아래의 .prev 정리 전에 확인해야
+    // 기존 undo 상태를 실수로 지우지 않는다.
+    {
+        bool anyArmed = false;
+        for (auto& ns : newStems)
+        {
+            const int c = ns.getFileName().fromFirstOccurrenceOf ("ch", false, false)
+                              .upToFirstOccurrenceOf ("_", false, false).getIntValue() - 1;
+            if (c >= 0 && c < 32 && (armedMask & (1u << (juce::uint32) c)) != 0)
+                { anyArmed = true; break; }
+        }
+        if (! anyArmed)
+            return;
+    }
+
+    // 이전 커밋의 stale .prev 정리 — 부분 채널 커밋에서 만지지 않은 채널의 옛
+    // .prev 가 남으면 undo 가 회차가 섞인 상태를 복원한다 (DESIGN §5.12).
+    {
+        juce::Array<juce::File> stale;
+        takeDir.findChildFiles (stale, juce::File::findFiles, false, "*.prev");
+        for (auto& f : stale)
+            f.deleteFile();
+    }
+
+    // 길이 불변식: 절대 줄지 않는다 — 시작값이 기존 길이 (§5.12)
+    const juce::int64 prevLen = (juce::int64) (double) readTimeline (takeDir).getProperty ("lengthSamples", 0.0);
+
     juce::AudioBuffer<float> buf (1, 32768);
-    juce::int64 finalLen = 0;
+    juce::int64 finalLen = prevLen;
     juce::int64 newLen   = 0;
+    juce::Array<int> armedChannels;   // 이번 커밋이 실제로 만진 채널 (history "channels")
 
     for (auto& ns : newStems)
     {
         const auto name    = ns.getFileName();
+
+        // 미선택 채널 — 파일 불가침 (꼬리 포함 전부 유지, .prev 도 만들지 않음)
+        const int chIndex = name.fromFirstOccurrenceOf ("ch", false, false)
+                                .upToFirstOccurrenceOf ("_", false, false).getIntValue() - 1;
+        if (chIndex < 0 || chIndex >= 32 || (armedMask & (1u << (juce::uint32) chIndex)) == 0)
+            continue;
+
         const auto dstFile = takeDir.getChildFile (name);
         const auto tmpOut  = takeDir.getChildFile (name + ".tmp");
 
@@ -151,22 +191,32 @@ void TakeManager::commitRecording (const juce::File& takeDir, const juce::File& 
         if (writer == nullptr)
             continue;
 
+        armedChannels.add (chIndex);
+
+        // 기존 파일 리더 — head 와 tail 양쪽에서 쓴다
+        std::unique_ptr<juce::AudioFormatReader> old (
+            dstFile.existsAsFile() ? formatMgr.createReaderFor (dstFile) : nullptr);
+        const juce::int64 oldLen = old != nullptr ? (juce::int64) old->lengthInSamples : 0;
+
+        auto copyFromReader = [&] (juce::AudioFormatReader& r, juce::int64 srcStart, juce::int64 count)
+        {
+            juce::int64 done = 0;
+            while (done < count)
+            {
+                const int n = (int) juce::jmin ((juce::int64) buf.getNumSamples(), count - done);
+                r.read (&buf, 0, n, srcStart + done, true, false);
+                writer->writeFromAudioSampleBuffer (buf, 0, n);
+                done += n;
+            }
+            return done;
+        };
+
         // 1) head: 기존 테이크 파일 [0..punchSamples), 부족분 무음 패딩
         juce::int64 written = 0;
-        if (punchSamples > 0 && dstFile.existsAsFile())
+        if (punchSamples > 0)
         {
-            if (auto* rr = formatMgr.createReaderFor (dstFile))
-            {
-                std::unique_ptr<juce::AudioFormatReader> old (rr);
-                const juce::int64 copyN = juce::jmin (punchSamples, (juce::int64) old->lengthInSamples);
-                while (written < copyN)
-                {
-                    const int n = (int) juce::jmin ((juce::int64) buf.getNumSamples(), copyN - written);
-                    old->read (&buf, 0, n, written, true, false);
-                    writer->writeFromAudioSampleBuffer (buf, 0, n);
-                    written += n;
-                }
-            }
+            if (old != nullptr)
+                written += copyFromReader (*old, 0, juce::jmin (punchSamples, oldLen));
             while (written < punchSamples)
             {
                 const int n = (int) juce::jmin ((juce::int64) buf.getNumSamples(), punchSamples - written);
@@ -176,27 +226,30 @@ void TakeManager::commitRecording (const juce::File& takeDir, const juce::File& 
             }
         }
 
-        // 2) 새 녹음 전체 이어붙임
+        // 2) 새 녹음 — srcOffset(프리롤) 건너뛰고, 펀치아웃이면 trim 으로 절단
+        //    (정지 지터와 무관하게 창 [in,out) 이 샘플 정확해진다)
         juce::int64 thisNew = 0;
         if (auto* nr = formatMgr.createReaderFor (ns))
         {
             std::unique_ptr<juce::AudioFormatReader> nw (nr);
-            const juce::int64 len = nw->lengthInSamples;
-            juce::int64 pos = 0;
-            while (pos < len)
-            {
-                const int n = (int) juce::jmin ((juce::int64) buf.getNumSamples(), len - pos);
-                nw->read (&buf, 0, n, pos, true, false);
-                writer->writeFromAudioSampleBuffer (buf, 0, n);
-                pos += n;
-            }
-            thisNew = len;
+            juce::int64 len = (juce::int64) nw->lengthInSamples - juce::jmax ((juce::int64) 0, srcOffsetSamples);
+            len = juce::jmax ((juce::int64) 0, len);
+            if (trimSamples > 0)
+                len = juce::jmin (len, trimSamples);
+            thisNew = copyFromReader (*nw, juce::jmax ((juce::int64) 0, srcOffsetSamples), len);
         }
 
+        // 3) tail: 기존 파일 [punch+N .. oldEnd) 이어붙임 — 꼬리 보존.
+        //    테이크 길이가 절대 줄지 않는 것은 이 복사가 보장한다 (§5.12).
+        juce::int64 tailN = 0;
+        if (old != nullptr && punchSamples + thisNew < oldLen)
+            tailN = copyFromReader (*old, punchSamples + thisNew, oldLen - (punchSamples + thisNew));
+
+        old.reset();      // 리더 해제 (아래 렌임 전 필수)
         writer.reset();   // 파일 마감
 
         newLen   = juce::jmax (newLen, thisNew);
-        finalLen = juce::jmax (finalLen, written + thisNew);
+        finalLen = juce::jmax (finalLen, written + thisNew + tailN);
 
         // 스왑: 기존을 .prev 로 보존(undo 1단계) → tmp 를 정식 이름으로
         const auto prevFile = takeDir.getChildFile (name + ".prev");
@@ -222,6 +275,12 @@ void TakeManager::commitRecording (const juce::File& takeDir, const juce::File& 
                 const auto prev = takeDir.getChildFile (f.getFileName() + ".prev");
                 prev.deleteFile();
                 f.moveFileTo (prev);
+
+                // 지운 채널도 "만진 채널" — 없으면 undo 후 redo 가 이 파일을 되지우지 못한다.
+                const int c = f.getFileName().fromFirstOccurrenceOf ("ch", false, false)
+                                  .upToFirstOccurrenceOf ("_", false, false).getIntValue() - 1;
+                if (c >= 0)
+                    armedChannels.addIfNotAlreadyThere (c);
             }
         }
     }
@@ -249,11 +308,17 @@ void TakeManager::commitRecording (const juce::File& takeDir, const juce::File& 
     auto* entry = new juce::DynamicObject();
     entry->setProperty ("op",          punchSamples > 0 ? "punch" : "record");
     entry->setProperty ("startSample", punchSamples);
-    entry->setProperty ("endSample",   punchSamples + newLen);
+    entry->setProperty ("endSample",   punchSamples + newLen);   // 대체된 구간 [start,end)
     entry->setProperty ("at",          juce::Time::getCurrentTime().toISO8601 (true));
+    {
+        juce::Array<juce::var> chArr;
+        for (int c : armedChannels)
+            chArr.add (c);
+        entry->setProperty ("channels", chArr);   // 만진 채널 — UI 표기 + 부분 undo 판별
+    }
     history.add (juce::var (entry));
 
-    // 펀치인은 펀치 지점부터 끝까지 덮어씀 → 최종 길이 = punch + 새 녹음(짧아질 수 있음).
+    // 최종 길이 = max(기존, punch + 새 녹음) — 꼬리 보존으로 절대 줄지 않는다 (§5.12).
     obj->setProperty ("deviceName",    env.deviceName);
     obj->setProperty ("sampleRate",    sampleRate);
     obj->setProperty ("bufferSize",    env.bufferSize);
@@ -303,6 +368,25 @@ bool TakeManager::swapUndoState (const juce::File& takeDir) const
     if (! hasUndoState (takeDir))
         return false;
 
+    // 부분 채널 커밋 대응(§5.12): .prev 없는 현재 스템은 두 경우로 갈린다 —
+    // ① 스왑 대상 커밋이 만들거나 지운 파일(첫 녹음·채널 감소 등) → 옮겨야 함
+    // ② 부분 커밋이 만지지 않은 채널 → 불가침.
+    // 판별: 두 상태 중 **최신 쪽** timeline 의 마지막 이력 channels(만진 채널)로
+    // 가른다 — undo 때는 현재, redo 때는 .prev 가 최신이다.
+    const bool undoDirection = isCurrentNewer (takeDir);
+    const auto newerTimeline = undoDirection
+                                   ? readTimeline (takeDir)
+                                   : juce::JSON::parse (takeDir.getChildFile ("timeline.json.prev"));
+    juce::Array<int> touched;
+    bool hasTouchedInfo = false;
+    if (auto* h = newerTimeline.getProperty ("history", {}).getArray(); h != nullptr && ! h->isEmpty())
+        if (auto* chs = h->getLast().getProperty ("channels", {}).getArray())
+        {
+            hasTouchedInfo = true;   // 구버전 이력엔 없음 → 전 채널 취급(레거시 동작 유지)
+            for (auto& c : *chs)
+                touched.add ((int) c);
+        }
+
     bool ok = true;
     for (const auto& name : undoBaseNames (takeDir))
     {
@@ -316,7 +400,17 @@ bool TakeManager::swapUndoState (const juce::File& takeDir) const
             tmp.deleteFile();
             ok = cur.moveFileTo (tmp) && prev.moveFileTo (cur) && tmp.moveFileTo (prev) && ok;
         }
-        else if (hasCur)   ok = cur.moveFileTo (prev) && ok;   // 현재에만 → 보존 쪽으로
+        else if (hasCur)
+        {
+            if (hasTouchedInfo && name.startsWith ("ch"))
+            {
+                const int idx = name.fromFirstOccurrenceOf ("ch", false, false)
+                                    .upToFirstOccurrenceOf ("_", false, false).getIntValue() - 1;
+                if (! touched.contains (idx))
+                    continue;   // 부분 커밋이 만지지 않은 채널 — 불가침
+            }
+            ok = cur.moveFileTo (prev) && ok;   // 커밋이 만들거나 지운 파일 → 반대 상태로
+        }
         else if (hasPrev)  ok = prev.moveFileTo (cur) && ok;   // 보존에만 → 현재 쪽으로
     }
     return ok;

@@ -17,8 +17,9 @@ public:
     {
         juce::String op;          // "record" | "punch"
         juce::int64  startSample = 0;
-        juce::int64  endSample   = 0;
+        juce::int64  endSample   = 0;    // 대체된 구간 [start, end) — 꼬리는 보존된다 (§5.12)
         juce::String at;          // ISO 시각
+        juce::Array<int> channels;  // 이 커밋이 만진 채널(0기준). 비어있음 = 전 채널(구버전 호환)
     };
 
     /** 녹음 시점의 장치 환경(설정 스냅샷). */
@@ -58,12 +59,23 @@ public:
     /** 테이크에 저장된 세션 스냅샷(session.json) — 로드 시 복원용. */
     juce::var readSession (const juce::File& takeDir) const;
 
-    /** recTmp 의 새 녹음을 takeDir 에 커밋(펀치: 기존 [0..punchSamples) + 새 녹음).
+    /** recTmp 의 새 녹음을 takeDir 에 커밋 — 구간 대체 의미 (DESIGN §5.12):
+        armed 채널 = old[0..punch) + new + old[punch+N..oldEnd), 미선택 채널 = 불가침.
+        테이크 길이는 절대 줄지 않는다(늘어남만 허용).
         트랙별 파일 제자리 갱신 + timeline.json(이력·환경) 갱신 + session.json 스냅샷 저장.
-        커밋 직전 상태는 *.prev 로 보존된다(1단계 undo — swapUndoState). */
+        커밋 직전 상태는 *.prev 로 보존된다(1단계 undo — swapUndoState).
+
+        @param trimSamples       >0 이면 새 녹음을 이 길이로 절단 — 펀치아웃(out−in).
+                                 정지 타이밍 지터와 무관하게 샘플 정확해진다.
+        @param armedMask         비트 = 채널(ch01 = bit0). 기본 전 채널.
+        @param srcOffsetSamples  새 녹음의 앞에서 건너뛸 샘플 — 펀치 패스의 프리롤
+                                 (캡처는 패스 시작부터, 창은 in 부터). */
     void commitRecording (const juce::File& takeDir, const juce::File& recTmp,
                           juce::int64 punchSamples, const TakeEnv& env,
-                          const juce::var& sessionSnapshot);
+                          const juce::var& sessionSnapshot,
+                          juce::int64 trimSamples = 0,
+                          juce::uint32 armedMask = 0xffffffffu,
+                          juce::int64 srcOffsetSamples = 0);
 
     //==========================================================================
     // ── 녹음 undo/redo (1단계, 커밋 직전 상태와 스왑) ─────────────────────────

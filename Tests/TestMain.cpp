@@ -23,6 +23,7 @@
 #include "../Source/PluginCatalog.h"
 #include "../Source/TakeManager.h"
 #include "../Source/TimelinePlayer.h"
+#include "../Source/TimelineSegments.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -194,7 +195,8 @@ static void testTakeManager (const juce::File& sandbox)
     EXPECT (mgr.hasUndoState (takeDir));   // 커밋 직전(빈 테이크) 상태 보존
     EXPECT (readWav (takeDir.getChildFile ("ch01_dry.wav")) == take1);
 
-    // ── 2차 커밋: 펀치 P=5000, 새 녹음 8000 샘플 (-0.5f) → 최종 13000 ──
+    // ── 2차 커밋: 펀치 P=5000, 새 녹음 8000 샘플 (-0.5f) — 구간 대체(§5.12):
+    //    [5000,13000) 만 새 녹음, 꼬리 [13000,20000) 은 기존 유지 → 길이 불변 ──
     const auto rectmp2 = sandbox.getChildFile ("rectmp2");
     const int punch = 5000, len2 = 8000;
     std::vector<float> take2 (len2, -0.5f);
@@ -203,11 +205,13 @@ static void testTakeManager (const juce::File& sandbox)
 
     mgr.commitRecording (takeDir, rectmp2, punch, env, snap2);
     const auto merged = readWav (takeDir.getChildFile ("ch01_dry.wav"));
-    EXPECT ((int) merged.size() == punch + len2);
+    EXPECT ((int) merged.size() == len1);                            // 길이는 절대 줄지 않는다
     EXPECT (merged[0] == 0.25f && merged[punch - 1] == 0.25f);       // head = 기존
-    EXPECT (merged[punch] == -0.5f && merged.back() == -0.5f);       // tail = 새 녹음
-    EXPECT (mgr.readTake (takeDir).lengthSamples == punch + len2);
+    EXPECT (merged[punch] == -0.5f && merged[punch + len2 - 1] == -0.5f);   // [P,P+8000) = 새 녹음
+    EXPECT (merged[punch + len2] == 0.25f && merged.back() == 0.25f);       // 꼬리 = 기존 보존
+    EXPECT (mgr.readTake (takeDir).lengthSamples == len1);
     EXPECT (mgr.readTake (takeDir).historyCount == 2);
+    EXPECT (mgr.readTake (takeDir).history.getLast().endSample == punch + len2);   // 대체 구간
 
     // ── undo: 1차 커밋 상태로 복귀 ──
     EXPECT (mgr.isCurrentNewer (takeDir));
@@ -234,6 +238,66 @@ static void testTakeManager (const juce::File& sandbox)
         EXPECT (takeDir.getChildFile ("ch02_dry.wav").existsAsFile());
         EXPECT (mgr.swapUndoState (takeDir));                                        // redo → 다시 1채널
         EXPECT (! takeDir.getChildFile ("ch02_dry.wav").existsAsFile());
+    }
+
+    // ── armed 부분집합 + 펀치아웃 절단 (§5.12) ──
+    {
+        const auto tDir = mgr.createTake (env, snap1);
+        const auto rectmpA = sandbox.getChildFile ("rectmpA");
+        rectmpA.deleteRecursively();
+        EXPECT (writeWav (rectmpA.getChildFile ("ch01_dry.wav"), take1, 48000.0));
+        EXPECT (writeWav (rectmpA.getChildFile ("ch02_dry.wav"), take1, 48000.0));
+        mgr.commitRecording (tDir, rectmpA, 0, env, snap1);
+
+        // ch2(비트1)만 armed, P=5000, 새 8000 을 trim 4000 으로 절단 → [5000,9000) 만 대체
+        const auto rectmpB = sandbox.getChildFile ("rectmpB");
+        rectmpB.deleteRecursively();
+        EXPECT (writeWav (rectmpB.getChildFile ("ch01_dry.wav"), take2, 48000.0));
+        EXPECT (writeWav (rectmpB.getChildFile ("ch02_dry.wav"), take2, 48000.0));
+        mgr.commitRecording (tDir, rectmpB, punch, env, snap2, 4000, 0b10u);
+
+        EXPECT (readWav (tDir.getChildFile ("ch01_dry.wav")) == take1);   // 미선택 채널 불가침
+        const auto c2 = readWav (tDir.getChildFile ("ch02_dry.wav"));
+        EXPECT ((int) c2.size() == len1);                                  // 길이 불변
+        EXPECT (c2[punch - 1] == 0.25f && c2[punch] == -0.5f);             // in 경계
+        EXPECT (c2[punch + 3999] == -0.5f && c2[punch + 4000] == 0.25f);   // out 경계 = trim 절단
+        const auto info = mgr.readTake (tDir);
+        EXPECT (info.lengthSamples == len1);
+        EXPECT (info.history.getLast().endSample == punch + 4000);
+        EXPECT (info.history.getLast().channels.size() == 1
+             && info.history.getLast().channels[0] == 1);                  // 만진 채널 기록
+
+        // 부분 undo: 만지지 않은 ch01 은 불가침, ch02 만 원복 — redo 로 재적용
+        EXPECT (mgr.swapUndoState (tDir));
+        EXPECT (readWav (tDir.getChildFile ("ch01_dry.wav")) == take1);
+        EXPECT (readWav (tDir.getChildFile ("ch02_dry.wav")) == take1);
+        EXPECT (mgr.swapUndoState (tDir));
+        EXPECT (readWav (tDir.getChildFile ("ch01_dry.wav")) == take1);
+        EXPECT (readWav (tDir.getChildFile ("ch02_dry.wav")) == c2);
+    }
+
+    // ── 펀치 패스 커밋: srcOffset(프리롤) 건너뛰고 창만 절단 (§5.12 개정) ──
+    {
+        const auto tDir = mgr.createTake (env, snap1);
+        const auto rectmpC = sandbox.getChildFile ("rectmpC");
+        rectmpC.deleteRecursively();
+        EXPECT (writeWav (rectmpC.getChildFile ("ch01_dry.wav"), take1, 48000.0));
+        mgr.commitRecording (tDir, rectmpC, 0, env, snap1);   // 원본 20000 @0.25
+
+        // 패스: 커서 3000 에서 시작(프리롤 2000), 창 [5000,9000) — 캡처는 패스 전체.
+        // 캡처를 인덱스 램프로 만들어 창 절단이 "캡처의 어느 부분"인지 비트 검증한다.
+        const auto rectmpD = sandbox.getChildFile ("rectmpD");
+        rectmpD.deleteRecursively();
+        EXPECT (writeWav (rectmpD.getChildFile ("ch01_dry.wav"), makeRamp (10000), 48000.0));
+        mgr.commitRecording (tDir, rectmpD, 5000, env, snap2,
+                             4000 /*trim=out-in*/, 0xffffffffu, 2000 /*srcOffset=in-커서*/);
+
+        const auto c1 = readWav (tDir.getChildFile ("ch01_dry.wav"));
+        EXPECT ((int) c1.size() == len1);                       // 길이 불변
+        EXPECT (c1[4999] == 0.25f && c1[9000] == 0.25f);        // 창 밖 = 원본
+        EXPECT (c1[5000] == rampValue (2000));                  // 창 시작 = 캡처의 srcOffset 지점
+        EXPECT (c1[8999] == rampValue (5999));                  // 창 끝 = srcOffset+trim-1
+        EXPECT (mgr.readTake (tDir).history.getLast().endSample == 9000);
     }
 
     // ── 첫 녹음 undo → 빈 테이크, redo → 복원 ──
@@ -418,6 +482,120 @@ static void testTimelinePlayer (const juce::File& sandbox)
 }
 
 //==============================================================================
+//==============================================================================
+// 8. TimelineSegments — 유효 구간 스위프 (L + 펀치아웃, DESIGN §5.11/§5.12)
+//    history 항목 = 대체된 구간 [start,end). 스팬하는 기존 구간은 셋으로 쪼개진다.
+//    구버전 테이크(꼬리 절단 시절)는 totalSamples 클램프로 옛 의미와 일치.
+//==============================================================================
+static void testTimelineSegments()
+{
+    section ("TimelineSegments — 구간 대체 스위프");
+
+    // 변수명이 sr 이면 네임스페이스 sr:: 을 가린다.
+    constexpr double kSR = 48000.0;
+    auto smp = [] (double s) { return (juce::int64) (s * kSR); };
+
+    auto entry = [&] (const char* op, double s, double e)
+    {
+        TakeManager::HistoryEntry h;
+        h.op = op; h.startSample = smp (s); h.endSample = smp (e);
+        return h;
+    };
+    auto near = [] (double a, double b) { return std::abs (a - b) <= 1.0e-9; };
+
+    // 이력 없음 / SR 0 → 빈 지도
+    EXPECT (sr::computeEffectiveSegments ({}, kSR).isEmpty());
+    EXPECT (sr::computeEffectiveSegments ({ entry ("record", 0, 30) }, 0.0).isEmpty());
+
+    // 최초 녹음 하나 — 그대로
+    {
+        const auto segs = sr::computeEffectiveSegments ({ entry ("record", 0, 30) }, kSR);
+        EXPECT (segs.size() == 1);
+        EXPECT (near (segs[0].startSec, 0.0) && near (segs[0].endSec, 30.0));
+        EXPECT (segs[0].gen == 0 && ! segs[0].isPunch);
+    }
+
+    // 핵심: [10,15) 펀치가 [0,30) 을 **셋으로 쪼갠다** — 꼬리 [15,30) 은 옛 회차로 남는다
+    {
+        juce::Array<TakeManager::HistoryEntry> h;
+        h.add (entry ("record", 0, 30));
+        h.add (entry ("punch", 10, 15));
+
+        const auto segs = sr::computeEffectiveSegments (h, kSR);
+        EXPECT (segs.size() == 3);
+        EXPECT (near (segs[0].startSec,  0.0) && near (segs[0].endSec, 10.0) && segs[0].gen == 0);
+        EXPECT (near (segs[1].startSec, 10.0) && near (segs[1].endSec, 15.0) && segs[1].gen == 1 && segs[1].isPunch);
+        EXPECT (near (segs[2].startSec, 15.0) && near (segs[2].endSec, 30.0) && segs[2].gen == 0);
+    }
+
+    // 구버전 테이크 호환 — 같은 이력이라도 꼬리 절단 시절에는 길이가 15초.
+    // totalSamples 클램프가 존재하지 않는 [15,30) 을 걸러 옛 의미와 일치시킨다.
+    {
+        juce::Array<TakeManager::HistoryEntry> h;
+        h.add (entry ("record", 0, 30));
+        h.add (entry ("punch", 10, 15));
+
+        const auto segs = sr::computeEffectiveSegments (h, kSR, smp (15.0));
+        EXPECT (segs.size() == 2);
+        EXPECT (near (segs[1].endSec, 15.0) && segs[1].gen == 1);
+    }
+
+    // 여러 펀치 — 겹치는 부분만 대체되고 나머지 회차는 살아남는다
+    {
+        juce::Array<TakeManager::HistoryEntry> h;
+        h.add (entry ("record", 0, 30));
+        h.add (entry ("punch", 20, 25));
+        h.add (entry ("punch",  5, 12));
+
+        const auto segs = sr::computeEffectiveSegments (h, kSR);
+        EXPECT (segs.size() == 5);   // [0,5)g0 [5,12)g2 [12,20)g0 [20,25)g1 [25,30)g0
+        EXPECT (segs[0].gen == 0 && segs[1].gen == 2 && segs[2].gen == 0
+             && segs[3].gen == 1 && segs[4].gen == 0);
+        EXPECT (near (segs[1].startSec, 5.0) && near (segs[1].endSec, 12.0));
+        EXPECT (near (segs[3].startSec, 20.0) && near (segs[3].endSec, 25.0));
+    }
+
+    // 통째로 덮이면 소멸
+    {
+        juce::Array<TakeManager::HistoryEntry> h;
+        h.add (entry ("record", 0, 30));
+        h.add (entry ("punch", 10, 12));
+        h.add (entry ("punch",  5, 20));   // g1 을 완전히 덮는다
+
+        const auto segs = sr::computeEffectiveSegments (h, kSR);
+        for (const auto& g : segs)
+            EXPECT (g.gen != 1);
+    }
+
+    // 불변식: 시간 오름차순 · 무겹침 · 전체 스팬 보존 (길이는 절대 줄지 않는다)
+    {
+        juce::Array<TakeManager::HistoryEntry> h;
+        h.add (entry ("record", 0, 40));
+        h.add (entry ("punch", 30, 36));
+        h.add (entry ("punch", 12, 33));
+        h.add (entry ("punch", 25, 31));
+
+        const auto segs = sr::computeEffectiveSegments (h, kSR);
+        bool ordered = true;
+        for (int i = 1; i < segs.size(); ++i)
+            if (segs[i].startSec < segs[i - 1].endSec - 1.0e-9)
+                ordered = false;
+        EXPECT (ordered);
+        EXPECT (near (segs.getFirst().startSec, 0.0));
+        EXPECT (near (segs.getLast().endSec, 40.0));   // 꼬리 보존 → 스팬 유지
+
+        bool hasG3 = false;
+        for (const auto& g : segs)
+            if (g.gen == 3)
+                hasG3 = near (g.startSec, 25.0) && near (g.endSec, 31.0);
+        EXPECT (hasG3);
+
+        // 길이 0 커밋은 지도를 바꾸지 않는다
+        h.add (entry ("punch", 31, 31));
+        EXPECT (sr::computeEffectiveSegments (h, kSR).size() == segs.size());
+    }
+}
+
 static void testWorkerPool()
 {
     section ("AudioWorkerPool + ChannelStrip (병렬 DSP)");
@@ -605,6 +783,7 @@ int main()
     testTakeManager (sandbox);
     testTimelinePlayer (sandbox);
     testTimelinePlayerLoop (sandbox);
+    testTimelineSegments();         // 순수 함수 — 파일 불필요
     testWorkerPool();
     testBetaGate();                 // 순수 판정만 — checkAndTouch 는 실제 APPDATA/레지스트리를 써서 제외
 

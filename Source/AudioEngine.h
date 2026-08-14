@@ -73,7 +73,9 @@ public:
 
     //==========================================================================
     // ── 통합 타임라인 트랜스포트 (녹음/재생) ────────────────────────────────
-    enum TransportState { tsStopped = 0, tsRecording = 1, tsPlaying = 2 };
+    // tsPunchPass = 펀치 패스(§5.12 개정): 재생이 주도하고 녹음은 구간 창에서만 실효.
+    // 프리롤(부르며 들어옴) → 구간 진입 시 녹음 → 구간 통과 후에도 재생 계속 → ■ 에서 커밋.
+    enum TransportState { tsStopped = 0, tsRecording = 1, tsPlaying = 2, tsPunchPass = 3 };
     int  getTransportState() const noexcept { return transport.load (std::memory_order_acquire); }
 
     bool transportRecord (juce::String& error);   // 녹음 시작
@@ -103,6 +105,34 @@ public:
     /** 재생 시 채널 VST3 체인 통과 여부(옵션). */
     void setPlaybackThroughChain (bool b) noexcept { playThroughChain.store (b, std::memory_order_relaxed); }
     bool isPlaybackThroughChain() const noexcept   { return playThroughChain.load (std::memory_order_relaxed); }
+
+    //== 채널 M/S/R (DESIGN §5.12) ============================================
+    // M/S 는 **재생 스템 전용** — 라이브 입력 경로는 불가침. 솔로는 가산식.
+    // 오디오 스레드는 atomic 마스크만 읽는다. R 은 다음 녹음이 덮어쓸 채널(기본 전 채널).
+    void setChannelMuted  (int ch, bool b) noexcept { setMaskBit (muteMask, ch, b); }
+    void setChannelSoloed (int ch, bool b) noexcept { setMaskBit (soloMask, ch, b); }
+    void setChannelArmed  (int ch, bool b) noexcept { setMaskBit (armMask,  ch, b); }
+    bool isChannelMuted  (int ch) const noexcept { return ((muteMask.load (std::memory_order_relaxed) >> (juce::uint32) ch) & 1u) != 0; }
+    bool isChannelSoloed (int ch) const noexcept { return ((soloMask.load (std::memory_order_relaxed) >> (juce::uint32) ch) & 1u) != 0; }
+    bool isChannelArmed  (int ch) const noexcept { return ((armMask.load  (std::memory_order_relaxed) >> (juce::uint32) ch) & 1u) != 0; }
+
+    //== ⏺ 구간녹음 (로케이터 펀치 패스, §5.12) ================================
+    /** on + 구간 존재 시 ● 는 펀치 패스를 시작한다: 커서에서 재생 시작(프리롤),
+        구간 [in,out) 만 armed 채널에 녹음(경계는 커밋에서 샘플 정확 절단),
+        out 을 지나도 재생은 계속(포스트롤) — ■ 로 끝낸다. */
+    void setPunchRecordEnabled (bool b) noexcept { punchRecord = b; }
+    bool isPunchRecordEnabled() const noexcept   { return punchRecord; }
+    /** 이번 패스의 실효 구간(부분 펀치 반영) — GUI 상태 표기용. */
+    double getPunchInSeconds()  const noexcept { return punchEffInSec; }
+    double getPunchOutSeconds() const noexcept { return punchEffOutSec; }
+    /** 펀치 패스가 테이크 끝에 닿았는지 — GUI 타이머가 확인하고 true 면 transportStop()
+        (커밋은 메시지 스레드 몫이라 콜백이 직접 정지하지 못한다). */
+    bool shouldAutoStopRecording() const noexcept
+    {
+        return transport.load (std::memory_order_acquire) == tsPunchPass
+            && player.isLoaded()
+            && player.getPosition() >= player.getTotalSamples();
+    }
 
     //==========================================================================
     // ── 테이크 (녹음 프로젝트) ──────────────────────────────────────────────
@@ -215,6 +245,26 @@ private:
     TakeManager takeMgr;
     juce::File   currentTakeDir;       // 재생/펀치인 기준 테이크
     double       punchInSeconds = 0.0; // 이번 녹음의 시작 위치(펀치인)
+
+    // ── 펀치 패스 상태 (§5.12 개정) — 메시지 스레드 기록, 콜백은 atomic 창만 읽음 ──
+    double passStartSec   = 0.0;   // 패스(재생) 시작 위치 = 커서
+    double punchEffInSec  = 0.0;   // 실효 in (커서가 구간 안이면 커서 = 부분 펀치)
+    double punchEffOutSec = 0.0;
+    std::atomic<juce::int64> punchWinStart { 0 }, punchWinEnd { 0 };   // 장치 샘플 도메인
+    bool startPunchPass (juce::String& error);
+    void reloadTakeAtPlayhead();
+
+    // ── 채널 M/S/R 마스크 (§5.12) — 비트 = 채널. 오디오 스레드는 load 만. ──
+    static void setMaskBit (std::atomic<juce::uint32>& m, int ch, bool b) noexcept
+    {
+        if (! juce::isPositiveAndBelow (ch, 32))
+            return;
+        if (b) m.fetch_or  (1u << (juce::uint32) ch, std::memory_order_relaxed);
+        else   m.fetch_and (~(1u << (juce::uint32) ch), std::memory_order_relaxed);
+    }
+    std::atomic<juce::uint32> muteMask { 0 }, soloMask { 0 };
+    std::atomic<juce::uint32> armMask { 0xffffffffu };   // 기본 전 채널 armed = 현행 동작
+    bool punchRecord = false;          // ⏺ 구간녹음 토글 (메시지 스레드)
     double       playheadSeconds = 0.0;// 정지 시 유지되는 타임라인 위치
     double       currentTakeLengthSeconds = 0.0;   // 재생기 미로드 시 길이 표시용
 

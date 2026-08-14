@@ -93,6 +93,20 @@ juce::File AudioEngine::getRecTmpDir()
     return AppSettings::get().storageRoot().getChildFile (".rectmp");
 }
 
+void AudioEngine::reloadTakeAtPlayhead()
+{
+    // 커밋/스왑 직후 테이크를 다시 열어 playhead 위치로 — 그 자리에서 이어 재생/녹음 가능.
+    if (auto* dev = deviceManager.getCurrentAudioDevice(); dev != nullptr && currentTakeDir.isDirectory())
+    {
+        juce::String e;
+        if (player.load (currentTakeDir, dev->getCurrentBufferSizeSamples(),
+                         dev->getCurrentSampleRate(), e))
+            player.setPosition ((juce::int64) (playheadSeconds * player.getSampleRate()));
+        else
+            player.unload();
+    }
+}
+
 void AudioEngine::refreshTakeLength()
 {
     currentTakeLengthSeconds = currentTakeDir.isDirectory()
@@ -237,14 +251,31 @@ void AudioEngine::deleteTake (const juce::File& takeDir)
 
 bool AudioEngine::transportRecord (juce::String& error)
 {
-    if (transport.load (std::memory_order_acquire) == tsPlaying)
+    const int st = transport.load (std::memory_order_acquire);
+    if (st == tsPlaying || st == tsPunchPass)
         transportStop();
+
+    // R(암) 채널이 하나도 없으면 녹음할 것이 없다 (§5.12)
+    {
+        const int n = getActiveChannelCount();
+        const juce::uint32 activeBits = n >= 32 ? 0xffffffffu : ((1u << (juce::uint32) n) - 1u);
+        if ((armMask.load (std::memory_order_relaxed) & activeBits) == 0)
+        {
+            error = u8 ("녹음할 채널이 없습니다 — 채널의 R 버튼을 켜세요.");
+            return false;
+        }
+    }
+
+    // ⏺ 구간녹음은 별도 흐름 — 재생이 주도하는 펀치 패스 (§5.12 개정)
+    if (punchRecord)
+        return startPunchPass (error);
 
     ensureCurrentTake();   // 현재 테이크 없으면 새로 생성(세션·환경 스냅샷)
 
     // 펀치인 = 현재 테이크에 이미 녹음이 있고 playhead>0 일 때. 아니면 0(처음부터).
     const bool takeHasAudio = takeMgr.readTake (currentTakeDir).lengthSamples > 0;
     punchInSeconds = takeHasAudio ? playheadSeconds : 0.0;
+    playheadSeconds = punchInSeconds;
 
     if (! startRecording (error))
     {
@@ -256,9 +287,68 @@ bool AudioEngine::transportRecord (juce::String& error)
     return true;
 }
 
+//==============================================================================
+// 펀치 패스 (§5.12 개정) — 재생이 주, 녹음은 구간 창.
+// 캡처는 패스 시작부터 전부 받고(스크래치), 커밋에서 [in,out) 창만 샘플 정확히
+// 잘라 머지한다 — 실시간 스위칭 타이밍에 경계가 걸리지 않는다.
+bool AudioEngine::startPunchPass (juce::String& error)
+{
+    if (! hasLoopRange())
+    {
+        error = u8 ("구간녹음: 타임라인에서 구간을 먼저 지정하세요.");
+        return false;
+    }
+    if (playheadSeconds >= loopEndSec)
+    {
+        error = u8 ("재생 위치가 구간 뒤에 있습니다 — 구간 앞으로 이동한 뒤 시작하세요.");
+        return false;
+    }
+
+    ensureCurrentTake();
+
+    // 재생 준비 — 펀치 패스는 기존 오디오를 들으며 부르는 것이 본질이라 재생 가능해야 한다.
+    if (! player.isLoaded())
+    {
+        auto* dev = deviceManager.getCurrentAudioDevice();
+        if (dev == nullptr)
+        {
+            error = u8 ("오디오 장치가 없습니다.");
+            return false;
+        }
+        if (! currentTakeDir.isDirectory() || takeMgr.readTake (currentTakeDir).lengthSamples <= 0)
+        {
+            error = u8 ("구간녹음은 기존 녹음 위에 하는 것입니다 — 먼저 일반 녹음을 하세요.");
+            return false;
+        }
+        if (! player.load (currentTakeDir, dev->getCurrentBufferSizeSamples(),
+                           dev->getCurrentSampleRate(), error))
+            return false;
+    }
+
+    passStartSec   = playheadSeconds;
+    punchEffInSec  = juce::jmax (loopStartSec, playheadSeconds);   // 구간 안 시작 = 부분 펀치
+    punchEffOutSec = loopEndSec;
+    punchInSeconds = punchEffInSec;
+
+    // 콜백용 창 (장치 샘플 도메인) — input echo 판정
+    const double osr = player.getSampleRate();
+    punchWinStart.store ((juce::int64) std::llround (punchEffInSec  * osr), std::memory_order_relaxed);
+    punchWinEnd.store   ((juce::int64) std::llround (punchEffOutSec * osr), std::memory_order_relaxed);
+
+    if (! startRecording (error))
+        return false;
+
+    player.setLoop (false, 0, 0);   // 패스는 한 방향 — 반복은 패스 동안 무시
+    player.setPosition ((juce::int64) (passStartSec * osr));
+
+    transport.store (tsPunchPass, std::memory_order_release);
+    return true;
+}
+
 bool AudioEngine::transportPlay (juce::String& error)
 {
-    if (transport.load (std::memory_order_acquire) == tsRecording)
+    if (const int st = transport.load (std::memory_order_acquire);
+        st == tsRecording || st == tsPunchPass)
         transportStop();
 
     if (! player.isLoaded())
@@ -312,6 +402,41 @@ void AudioEngine::transportStop()
         return;
     }
 
+    if (prev == tsPunchPass)
+    {
+        // 펀치 패스 종료 (§5.12 개정): 정지 위치 = 재생이 멈춘 곳(포스트롤 포함).
+        // 커밋은 캡처 전체에서 [in,out) 창만 잘라 머지한다.
+        recorder.stop();
+
+        if (player.isLoaded() && player.getSampleRate() > 0.0)
+            playheadSeconds = player.getPosition() / player.getSampleRate();
+
+        const double recSec    = recorder.getRecordedSeconds();
+        const double srcOffSec = punchEffInSec - passStartSec;   // 프리롤 — 커밋에서 버림
+        const double availSec  = recSec - srcOffSec;             // 창에 실제로 도달한 분량
+
+        player.unload();   // 커밋 전 테이크 파일에 대한 리더 해제
+
+        if (availSec > 1.0e-6)   // in 도달 전에 멈췄으면 커밋 없음 — 아무것도 안 바뀐다
+        {
+            const double sr = getCurrentSampleRate() > 0.0 ? getCurrentSampleRate() : 48000.0;
+            const double windowSec = juce::jmin (punchEffOutSec - punchEffInSec, availSec);
+            takeMgr.commitRecording (currentTakeDir, getRecTmpDir(),
+                                     (juce::int64) std::llround (punchEffInSec * sr),
+                                     currentEnv(), getSessionVar(),
+                                     (juce::int64) std::llround (windowSec * sr),
+                                     armMask.load (std::memory_order_relaxed),
+                                     (juce::int64) std::llround (srcOffSec * sr));
+        }
+
+        punchInSeconds = 0.0;
+        refreshTakeLength();
+        reloadTakeAtPlayhead();
+        if (onTakesChanged != nullptr)
+            onTakesChanged();
+        return;
+    }
+
     if (prev != tsRecording)
         return;
 
@@ -320,26 +445,19 @@ void AudioEngine::transportStop()
 
     player.unload();   // 커밋 전 테이크 파일에 대한 리더 해제
 
-    // 스크래치 녹음을 현재 테이크에 제자리 커밋(펀치: 기존 head + 새 녹음) + 이력·세션 스냅샷.
+    // 스크래치 녹음을 현재 테이크에 구간 대체 커밋 (§5.12: 꼬리 보존, armed 채널만)
+    // + 이력·세션 스냅샷.
     const double sr = getCurrentSampleRate() > 0.0 ? getCurrentSampleRate() : 48000.0;
     takeMgr.commitRecording (currentTakeDir, getRecTmpDir(),
-                             (juce::int64) (punchInSeconds * sr), currentEnv(), getSessionVar());
+                             (juce::int64) (punchInSeconds * sr), currentEnv(), getSessionVar(),
+                             0, armMask.load (std::memory_order_relaxed));
 
     // 정지 위치 = 방금 녹음 끝. 그 자리에서 이어 녹음/재생 가능하게 테이크를 로드해 둔다.
     playheadSeconds = punchInSeconds + recLen;
     punchInSeconds = 0.0;
 
     refreshTakeLength();
-
-    if (auto* dev = deviceManager.getCurrentAudioDevice(); dev != nullptr && currentTakeDir.isDirectory())
-    {
-        juce::String e;
-        if (player.load (currentTakeDir, dev->getCurrentBufferSizeSamples(),
-                         dev->getCurrentSampleRate(), e))
-            player.setPosition ((juce::int64) (playheadSeconds * player.getSampleRate()));
-        else
-            player.unload();
-    }
+    reloadTakeAtPlayhead();
 
     if (onTakesChanged != nullptr)
         onTakesChanged();
@@ -369,6 +487,10 @@ void AudioEngine::setPlayPositionSeconds (double s)
 void AudioEngine::applyLoopToPlayer()
 {
     if (! player.isLoaded() || player.getSampleRate() <= 0.0)
+        return;
+
+    // 펀치 패스 중에는 반복을 내려보내지 않는다 — 패스는 한 방향 (§5.12).
+    if (transport.load (std::memory_order_acquire) == tsPunchPass)
         return;
 
     const double sr = player.getSampleRate();
@@ -425,7 +547,8 @@ double AudioEngine::getTimelineSeconds() const
     switch (transport.load (std::memory_order_acquire))
     {
         case tsRecording: return punchInSeconds + recorder.getRecordedSeconds();   // 펀치인 위치부터
-        case tsPlaying:   return player.getSampleRate() > 0.0 ? player.getPosition() / player.getSampleRate() : 0.0;
+        case tsPlaying:
+        case tsPunchPass: return player.getSampleRate() > 0.0 ? player.getPosition() / player.getSampleRate() : 0.0;
         default:          return playheadSeconds;   // 정지: 유지된 위치
     }
 }
@@ -498,6 +621,10 @@ juce::var AudioEngine::getSessionVar()
         {
             o->setProperty ("input",  ch + 1);
             o->setProperty ("output", ch + 1);
+            // M/S/R — 믹서 상태의 일부 (§5.12)
+            o->setProperty ("mute", isChannelMuted (ch));
+            o->setProperty ("solo", isChannelSoloed (ch));
+            o->setProperty ("arm",  isChannelArmed (ch));
         }
         stripArr.add (v);
     }
@@ -508,6 +635,7 @@ juce::var AudioEngine::getSessionVar()
     lp->setProperty ("enabled",  loopEnabled);
     lp->setProperty ("startSec", loopStartSec);
     lp->setProperty ("endSec",   loopEndSec);
+    lp->setProperty ("punchRecord", punchRecord);   // ⏺ 구간녹음 토글 (§5.12)
     root->setProperty ("loop", juce::var (lp));
 
     return juce::var (root);
@@ -520,6 +648,7 @@ void AudioEngine::applySessionVar (const juce::var& root, juce::StringArray& err
         loopStartSec = (double) lp.getProperty ("startSec", 0.0);
         loopEndSec   = (double) lp.getProperty ("endSec",   0.0);
         loopEnabled  = (bool)   lp.getProperty ("enabled",  false);
+        punchRecord  = (bool)   lp.getProperty ("punchRecord", false);
         applyLoopToPlayer();
     }
 
@@ -531,6 +660,9 @@ void AudioEngine::applySessionVar (const juce::var& root, juce::StringArray& err
             const float gainDb = (float) (double) s.getProperty ("outGainDb", 0.0);
             strips[(size_t) ch]->setChannelName (s.getProperty ("name", "").toString());
             strips[(size_t) ch]->loadChain (s.getProperty ("plugins", {}), gainDb, errors);
+            setChannelMuted  (ch, (bool) s.getProperty ("mute", false));
+            setChannelSoloed (ch, (bool) s.getProperty ("solo", false));
+            setChannelArmed  (ch, (bool) s.getProperty ("arm",  true));   // 부재 = armed (구버전)
         }
     }
 }
@@ -776,12 +908,30 @@ void AudioEngine::processAudioBlock (const float* const* inputChannelData,
         return;   // 측정 중엔 일반 처리 생략
     }
 
-    // ── 재생 모드 ── 라이브 입력 뮤트, 녹음된 스템을 (옵션: 체인 통과) 출력 ──
-    if (transport.load (std::memory_order_acquire) == tsPlaying)
+    // ── 재생/펀치 패스 ── 라이브 입력 뮤트, 녹음된 스템을 (옵션: 체인 통과) 출력.
+    // 펀치 패스는 여기에 둘을 얹는다: ① dry 입력을 계속 캡처(창 절단은 커밋에서)
+    // ② 구간 안 armed 채널은 스템 대신 라이브 입력을 모니터링 (input echo, §5.12).
+    if (const int tState = transport.load (std::memory_order_acquire);
+        tState == tsPlaying || tState == tsPunchPass)
     {
+        const bool punchPass = tState == tsPunchPass;
+        const juce::int64 blockStart = player.getPosition();
+
         player.readBlock (numSamples);
         const bool thru = playThroughChain.load (std::memory_order_relaxed);
         const int  pch  = player.getNumChannels();
+
+        // M/S 게이팅 — 재생 스템 전용 (§5.12). 솔로가 하나라도 있으면 솔로 아닌
+        // 채널은 뮤트 취급. 라이브 경로(아래 정지/녹음 분기)는 마스크를 보지 않는다.
+        const juce::uint32 mutes = muteMask.load (std::memory_order_relaxed);
+        const juce::uint32 solos = soloMask.load (std::memory_order_relaxed);
+
+        // input echo 판정 — 블록 단위 전환은 모니터링용이라 충분하다.
+        // 녹음 창 자체는 커밋에서 샘플 정확히 절단되므로 경계 오차가 없다.
+        const juce::uint32 arms = armMask.load (std::memory_order_relaxed);
+        const bool inWindow = punchPass
+                                  && blockStart <  punchWinEnd.load  (std::memory_order_relaxed)
+                                  && blockStart + numSamples > punchWinStart.load (std::memory_order_relaxed);
 
         int numJobs = 0;   // 체인 통과 채널만 잡으로 (A2 병렬)
 
@@ -791,7 +941,23 @@ void AudioEngine::processAudioBlock (const float* const* inputChannelData,
             if (out == nullptr)
                 continue;
 
-            const float* stem = (ch < pch) ? player.getChannel (ch) : nullptr;
+            // 구간 안 + armed → 라이브 입력 모니터링 (라이브 모드와 동일하게 체인 통과)
+            if (inWindow && ch < 32 && ((arms >> (juce::uint32) ch) & 1u) != 0
+                && ch < numInputChannels && inputChannelData[ch] != nullptr)
+            {
+                const float* in = inputChannelData[ch];
+                updateInputPeak (ch, in, numSamples);
+                if (ch < (int) strips.size())
+                    jobScratch[(size_t) numJobs++] = { strips[(size_t) ch].get(), in, out, numSamples };
+                else
+                    juce::FloatVectorOperations::copy (out, in, numSamples);
+                continue;
+            }
+
+            const bool audible = ch >= 32
+                                     || (((mutes >> (juce::uint32) ch) & 1u) == 0
+                                         && (solos == 0 || ((solos >> (juce::uint32) ch) & 1u) != 0));
+            const float* stem = (audible && ch < pch) ? player.getChannel (ch) : nullptr;
             if (stem != nullptr)
             {
                 updateInputPeak (ch, stem, numSamples);
@@ -809,8 +975,13 @@ void AudioEngine::processAudioBlock (const float* const* inputChannelData,
 
         workerPool.processJobs (jobScratch.data(), numJobs);
 
-        // 끝에 도달하면 정지(라이브 모니터 복귀). 정리는 GUI/다음 재생에서.
-        if (player.getPosition() >= player.getTotalSamples())
+        // 펀치 패스: dry 입력을 계속 캡처 — 커밋이 [in,out) 창만 잘라 쓴다.
+        if (punchPass)
+            recorder.writeBlock (inputChannelData, numInputChannels, numSamples);
+
+        // 끝 도달: 일반 재생만 콜백에서 정지. 펀치 패스는 커밋이 필요해
+        // 메시지 스레드가 정지시킨다 (shouldAutoStopRecording → GUI 타이머).
+        if (! punchPass && player.getPosition() >= player.getTotalSamples())
             transport.store (tsStopped, std::memory_order_release);
 
         return;

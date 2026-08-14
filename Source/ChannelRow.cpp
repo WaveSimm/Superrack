@@ -135,6 +135,35 @@ ChannelRow::ChannelRow (int channelIndex, ChannelStrip& stripRef, MainComponent&
     gainSlider.onDragEnd = [this] { owner.notifySessionChanged(); };
     addAndMakeVisible (gainSlider);
 
+    // ── M/S/R (DESIGN §5.12) — M/S 는 재생 스템 전용, R 은 다음 녹음의 대상 채널 ──
+    auto& eng = owner.getEngine();
+    auto initMsr = [&] (juce::TextButton& b, juce::Colour onColour, const juce::String& tip,
+                        bool initialState, std::function<void (bool)> apply)
+    {
+        b.setClickingTogglesState (true);
+        b.setLookAndFeel (&boldButtonLnf());
+        b.setColour (juce::TextButton::buttonOnColourId, onColour);
+        b.setTooltip (tip);
+        b.setToggleState (initialState, juce::dontSendNotification);
+        b.onClick = [this, &b, apply = std::move (apply)]
+        {
+            apply (b.getToggleState());
+            owner.notifySessionChanged();
+        };
+        addAndMakeVisible (b);
+    };
+
+    const int ch = channel;
+    initMsr (muteButton, juce::Colours::orange.darker (0.2f),
+             u8 ("재생 뮤트 — 스템 재생만 끕니다 (라이브 입력·녹음은 그대로)"),
+             eng.isChannelMuted (ch),  [this, ch] (bool b) { owner.getEngine().setChannelMuted  (ch, b); });
+    initMsr (soloButton, juce::Colours::yellow.darker (0.25f),
+             u8 ("재생 솔로 — 솔로 채널만 들립니다 (여러 채널 가능)"),
+             eng.isChannelSoloed (ch), [this, ch] (bool b) { owner.getEngine().setChannelSoloed (ch, b); });
+    initMsr (armButton, juce::Colours::red.darker (0.15f),
+             u8 ("녹음 암 — 다음 녹음/펀치가 이 채널을 덮어씁니다.\n꺼진 채널의 오디오는 녹음해도 그대로 남습니다."),
+             eng.isChannelArmed (ch),  [this, ch] (bool b) { owner.getEngine().setChannelArmed  (ch, b); });
+
     addButton.setLookAndFeel (&boldButtonLnf());
     addButton.onClick = [this] { openPluginBrowser(); };
     addAndMakeVisible (addButton);
@@ -176,6 +205,12 @@ void ChannelRow::resized()
     r.removeFromLeft (4);
     nameField.setBounds (r.removeFromLeft (nameW).reduced (0, 2));   // 편집 가능한 이름
     r.removeFromLeft (8);
+
+    muteButton.setBounds (r.removeFromLeft (msrW).reduced (0, 2));  r.removeFromLeft (2);
+    soloButton.setBounds (r.removeFromLeft (msrW).reduced (0, 2));  r.removeFromLeft (2);
+    armButton.setBounds  (r.removeFromLeft (msrW).reduced (0, 2));
+    r.removeFromLeft (8);
+
     meterBounds = r.removeFromLeft (meterW).reduced (0, 5);    // 미터 (paint)
     r.removeFromLeft (8);
 

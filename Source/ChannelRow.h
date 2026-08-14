@@ -67,6 +67,9 @@ private:
 
     juce::Label      nameField;           // 편집 가능한 채널 이름 (세션 저장)
     juce::Slider     gainSlider;          // 채널 출력 게인 (dB)
+    juce::TextButton muteButton { "M" };  // 재생 스템 뮤트 (라이브 입력 불가침, §5.12)
+    juce::TextButton soloButton { "S" };  // 재생 스템 솔로 (가산식)
+    juce::TextButton armButton  { "R" };  // 녹음 암 — 다음 녹음이 덮어쓸 채널
     juce::TextButton addButton { "+ VST3" };
     juce::OwnedArray<PluginChip> chips;
 
@@ -77,6 +80,7 @@ private:
     static constexpr int nameW    = 104;  // 편집 가능한 이름 필드
     static constexpr int meterW   = 96;
     static constexpr int gainW    = 72;   // 출력 게인 슬라이더
+    static constexpr int msrW     = 20;   // M/S/R 토글 하나의 폭
     static constexpr int addW     = 72;
     static constexpr int arrowGap = 6;    // 셰브런 칩 사이 간격
 

@@ -160,120 +160,6 @@ private:
 
 
 //==============================================================================
-// LoopRangeStrip — 진행바 위 반복 구간 지정
-//==============================================================================
-bool LoopRangeStrip::hitTest (int, int y)
-{
-    // 위쪽 밴드만 잡는다 — 아래는 진행바가 받아 시크(네비게이션)한다.
-    return y < bandHeight();
-}
-
-void LoopRangeStrip::paint (juce::Graphics& g)
-{
-    const auto band = getLocalBounds().withHeight (bandHeight()).toFloat();
-
-    // 드래그 가능한 띠임을 알리는 옅은 바탕 (진행바와 구분되는 최소 표시)
-    g.setColour (juce::Colours::white.withAlpha (0.05f));
-    g.fillRect (band);
-
-    if (totalSec <= 0.0)
-        return;
-
-    if (! hasRange())
-    {
-        g.setColour (juce::Colours::grey.withAlpha (0.55f));
-        g.setFont (juce::Font (juce::FontOptions (9.5f)));
-        g.drawText (juce::CharPointer_UTF8 ("드래그 = 반복 구간"),
-                    band.toNearestInt(), juce::Justification::centred, false);
-        return;
-    }
-
-    const auto x1 = secToX (juce::jmin (startSec, endSec));
-    const auto x2 = secToX (juce::jmax (startSec, endSec));
-    const auto w  = juce::jmax (2.0f, x2 - x1);
-
-    // 활성(반복 켜짐) = 초록, 꺼짐 = 회색 — 구간은 남아 있고 반복만 꺼진 상태를 구분한다.
-    const auto base = active ? juce::Colours::limegreen : juce::Colours::grey;
-
-    // 진행바 전체 높이에 옅은 기둥 — 구간이 재생 위치·녹음 구간의 어디인지 읽히게.
-    g.setColour (base.withAlpha (active ? 0.16f : 0.09f));
-    g.fillRect (x1, 0.0f, w, (float) getHeight());
-
-    // 위 밴드는 진하게 = 여기가 잡는 곳
-    g.setColour (base.withAlpha (active ? 0.70f : 0.35f));
-    g.fillRect (x1, band.getY(), w, band.getHeight());
-
-    g.setColour (base.withAlpha (0.95f));
-    g.fillRect (x1, 0.0f, 2.0f, (float) getHeight());
-    g.fillRect (x2 - 2.0f, 0.0f, 2.0f, (float) getHeight());
-}
-
-void LoopRangeStrip::mouseDown (const juce::MouseEvent& e)
-{
-    if (totalSec <= 0.0)
-        return;
-
-    if (hasRange())
-    {
-        const auto x1 = secToX (juce::jmin (startSec, endSec));
-        const auto x2 = secToX (juce::jmax (startSec, endSec));
-
-        if (std::abs ((float) e.x - x1) <= (float) handlePx)      { dragMode = DragMode::moveStart; return; }
-        if (std::abs ((float) e.x - x2) <= (float) handlePx)      { dragMode = DragMode::moveEnd;   return; }
-    }
-
-    // 새 구간 — 누른 지점을 기준점으로 잡고 드래그 방향에 따라 늘린다.
-    anchorSec = xToSec (e.x);
-    startSec = endSec = anchorSec;
-    dragMode = DragMode::create;
-    repaint();
-}
-
-void LoopRangeStrip::mouseDrag (const juce::MouseEvent& e)
-{
-    if (dragMode == DragMode::none)
-        return;
-
-    const auto s = xToSec (e.x);
-    switch (dragMode)
-    {
-        case DragMode::create:    startSec = juce::jmin (anchorSec, s); endSec = juce::jmax (anchorSec, s); break;
-        case DragMode::moveStart: startSec = s; break;
-        case DragMode::moveEnd:   endSec   = s; break;
-        default: break;
-    }
-    repaint();
-}
-
-void LoopRangeStrip::mouseUp (const juce::MouseEvent&)
-{
-    if (dragMode == DragMode::none)
-        return;
-
-    dragMode = DragMode::none;
-
-    // 클릭에 가까운 미세 드래그는 구간으로 치지 않는다(실수로 0길이 구간이 생김).
-    if (std::abs (endSec - startSec) < 0.05)
-    {
-        startSec = endSec = 0.0;
-        repaint();
-        commit();
-        return;
-    }
-
-    repaint();
-    commit();
-}
-
-void LoopRangeStrip::mouseDoubleClick (const juce::MouseEvent&)
-{
-    startSec = endSec = 0.0;
-    dragMode = DragMode::none;
-    repaint();
-    commit();
-}
-
-//==============================================================================
 // SettingsWindow — 장치 설정 + 앱 설정을 담는 별도 창
 //==============================================================================
 SettingsWindow::SettingsWindow (AudioEngine& engine, std::function<void()> onCloseCallback)
@@ -414,17 +300,17 @@ MainComponent::MainComponent()
 
     // ── 트랜스포트 컨트롤 행 ──
     rewindButton.setButtonText (juce::CharPointer_UTF8 ("\xe2\x8f\xae"));   // ⏮ 처음으로
-    rewindButton.setLookAndFeel (&boldButtonLnf());
+    rewindButton.setLookAndFeel (&sr::transportButtonLnf());
     rewindButton.onClick = [this] { engine.transportRewind(); updateTransportUI(); };
     addAndMakeVisible (rewindButton);
 
     toEndButton.setButtonText (juce::CharPointer_UTF8 ("\xe2\x8f\xad"));    // ⏭ 끝으로
-    toEndButton.setLookAndFeel (&boldButtonLnf());
+    toEndButton.setLookAndFeel (&sr::transportButtonLnf());
     toEndButton.onClick = [this] { engine.transportToEnd(); updateTransportUI(); };
     addAndMakeVisible (toEndButton);
 
     recordButton.setButtonText (juce::CharPointer_UTF8 ("\xe2\x97\x8f"));   // ●
-    recordButton.setLookAndFeel (&boldButtonLnf());
+    recordButton.setLookAndFeel (&sr::transportButtonLnf());
     recordButton.onClick = [this]
     {
         if (engine.getTransportState() == AudioEngine::tsRecording)
@@ -441,7 +327,7 @@ MainComponent::MainComponent()
     addAndMakeVisible (recordButton);
 
     playButton.setButtonText (juce::CharPointer_UTF8 ("\xe2\x96\xb6"));     // ▶
-    playButton.setLookAndFeel (&boldButtonLnf());
+    playButton.setLookAndFeel (&sr::transportButtonLnf());
     playButton.onClick = [this]
     {
         if (engine.getTransportState() == AudioEngine::tsPlaying)
@@ -458,7 +344,7 @@ MainComponent::MainComponent()
     addAndMakeVisible (playButton);
 
     stopButton.setButtonText (juce::CharPointer_UTF8 ("\xe2\x96\xa0"));     // ■
-    stopButton.setLookAndFeel (&boldButtonLnf());
+    stopButton.setLookAndFeel (&sr::transportButtonLnf());
     stopButton.onClick = [this] { engine.transportStop(); updateTransportUI(); };
     addAndMakeVisible (stopButton);
 
@@ -467,39 +353,46 @@ MainComponent::MainComponent()
     timeLabel.setFont (juce::Font (juce::FontOptions (14.0f)));
     addAndMakeVisible (timeLabel);
 
-    positionSlider.setSliderStyle (juce::Slider::LinearBar);
-    positionSlider.setRange (0.0, 1.0, 0.0);
-    positionSlider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
-    positionSlider.onDragStart = [this] { seeking = true; };
-    positionSlider.onDragEnd   = [this]
+    // ── 타임라인 3레인 (DESIGN §5.11) ──
+    // 진행은 채우기가 아니라 커서로 보여준다. 시크는 그 커서를 끄는 것이다.
+    timeline.onSeekDragChanged = [this] (bool dragging) { seeking = dragging; };
+    timeline.onSeek = [this] (double posSec)
     {
-        engine.setPlayPositionSeconds (positionSlider.getValue());
-        seeking = false;
+        engine.setPlayPositionSeconds (posSec);
         updateTransportUI();
     };
-    addAndMakeVisible (positionSlider);
-    addAndMakeVisible (punchOverlay);   // 슬라이더 뒤에 추가 = 위에 그려짐 (마우스 통과)
+    timeline.onLoopRangeChanged = [this] (double s, double e)
+    {
+        engine.setLoopRange (s, e);
+        notifySessionChanged();
+    };
+    addAndMakeVisible (timeline);
 
     // ── 구간 반복 (가상 리허설) ──
     loopButton.setButtonText (u8 ("\xe2\x86\xba 반복"));
     loopButton.setClickingTogglesState (true);
     loopButton.setColour (juce::TextButton::buttonOnColourId, juce::Colours::limegreen.darker (0.2f));
-    loopButton.setTooltip (u8 ("반복 구간을 지정한 뒤 켜면 그 구간만 되풀이 재생합니다."));
+    loopButton.setTooltip (u8 ("반복 구간을 지정한 뒤 켜면 그 구간만 되풀이 재생합니다.\n구간은 타임라인의 반복 레인을 드래그해 지정합니다."));
     loopButton.onClick = [this]
     {
         engine.setLoopEnabled (loopButton.getToggleState());
-        loopStrip.setActive (loopButton.getToggleState() && engine.hasLoopRange());
         notifySessionChanged();
     };
     addAndMakeVisible (loopButton);
 
-    loopStrip.onRangeChanged = [this] (double s, double e)
+    // ⏺ 구간녹음 — 같은 구간을 녹음이 로케이터로 쓸지 (§5.12). ↺ 는 재생, 이건 녹음.
+    punchButton.setButtonText (u8 ("\xe2\x8f\xba 구간녹음"));
+    punchButton.setClickingTogglesState (true);
+    punchButton.setColour (juce::TextButton::buttonOnColourId, juce::Colours::darkred);
+    punchButton.setTooltip (u8 ("켠 상태로 ● 하면 현재 위치에서 재생이 시작되고,\n"
+                                "구간에 들어가면 R 채널만 녹음, 구간을 지나면 재생이 계속됩니다.\n"
+                                "■ 로 끝내면 구간만 대체됩니다. 구간 안 R 채널은 내 소리가 들립니다."));
+    punchButton.onClick = [this]
     {
-        engine.setLoopRange (s, e);
-        loopStrip.setActive (loopButton.getToggleState() && engine.hasLoopRange());
+        engine.setPunchRecordEnabled (punchButton.getToggleState());
         notifySessionChanged();
     };
-    addAndMakeVisible (loopStrip);
+    addAndMakeVisible (punchButton);
 
     throughChainToggle.setToggleState (engine.isPlaybackThroughChain(), juce::dontSendNotification);
     throughChainToggle.setColour (juce::ToggleButton::textColourId, juce::Colours::white);
@@ -611,6 +504,13 @@ MainComponent::MainComponent()
     rebuildChannelRows();   // 초기 행
     refreshTakes();
 
+    // 트랜스포트 단축키(스페이스/R)는 이 컴포넌트가 받는다. 버튼/콤보가 클릭으로
+    // 포커스를 가져가면 스페이스가 "그 버튼 다시 누르기"로 소비되므로
+    // (정지 클릭 후 스페이스 → 재생이 아니라 정지 반복) 조작 컴포넌트의 키보드
+    // 포커스를 전부 끈다 — 마우스 조작에는 영향 없다.
+    setWantsKeyboardFocus (true);
+    disableKeyFocusOnControls (*this);
+
     updateTransportUI();
     setSize (860, 630);
     startTimerHz (30);
@@ -654,21 +554,23 @@ void MainComponent::resized()
 
     area.removeFromTop (6);
 
-    // 트랜스포트 행: ⏮ ⏭ ● ▶ ■ ↺  시간  [진행바]  [플러그인 통과]
-    // 반복 구간은 별도 줄이 아니라 진행바 위에 겹친다(위 밴드만 마우스를 받음).
+    // 트랜스포트 행: ⏮ ⏭ ● ▶ ■ ↺  시간              [플러그인 통과]
     auto tr = area.removeFromTop (30);
     rewindButton.setBounds (tr.removeFromLeft (38));  tr.removeFromLeft (4);
     toEndButton.setBounds  (tr.removeFromLeft (38));  tr.removeFromLeft (10);
     recordButton.setBounds (tr.removeFromLeft (38));  tr.removeFromLeft (4);
     playButton.setBounds   (tr.removeFromLeft (38));  tr.removeFromLeft (4);
     stopButton.setBounds   (tr.removeFromLeft (38));  tr.removeFromLeft (4);
-    loopButton.setBounds   (tr.removeFromLeft (72));  tr.removeFromLeft (10);
-    timeLabel.setBounds    (tr.removeFromLeft (150)); tr.removeFromLeft (8);
-    throughChainToggle.setBounds (tr.removeFromRight (170));  tr.removeFromRight (8);
-    const auto sliderArea = tr.reduced (0, 4);
-    positionSlider.setBounds (sliderArea);
-    punchOverlay.setBounds (sliderArea);
-    loopStrip.setBounds (sliderArea);   // 같은 좌표계 — 구간·녹음구간·재생위치가 정렬된다
+    loopButton.setBounds   (tr.removeFromLeft (72));  tr.removeFromLeft (4);
+    punchButton.setBounds  (tr.removeFromLeft (92));  tr.removeFromLeft (10);
+    timeLabel.setBounds    (tr.removeFromLeft (150));
+    throughChainToggle.setBounds (tr.removeFromRight (170));
+
+    area.removeFromTop (4);
+
+    // 타임라인은 전체 폭 전용 행 — 버튼과 나눠 쓰던 좁은 자리에서는 3레인이 읽히지 않고,
+    // 폭이 두 배가 되면서 시간 해상도도 그만큼 올라간다.
+    timeline.setBounds (area.removeFromTop (TimelineView::preferredHeight));
 
     area.removeFromTop (6);
 
@@ -708,7 +610,49 @@ void MainComponent::rebuildChannelRows()
             channelRows.add (rowc);
         }
 
+    disableKeyFocusOnControls (channelContainer);   // 새 행의 버튼도 단축키를 가로채지 않게
     layoutChannelContainer();
+}
+
+void MainComponent::disableKeyFocusOnControls (juce::Component& root)
+{
+    for (auto* child : root.getChildren())
+    {
+        if (dynamic_cast<juce::Button*> (child) != nullptr
+         || dynamic_cast<juce::ComboBox*> (child) != nullptr)
+        {
+            child->setWantsKeyboardFocus (false);
+            child->setMouseClickGrabsKeyboardFocus (false);
+        }
+        disableKeyFocusOnControls (*child);
+    }
+}
+
+bool MainComponent::keyPressed (const juce::KeyPress& key)
+{
+    // DAW 관행: 스페이스 = 재생/정지, R = 녹음 시작/정지.
+    // 채널 이름 편집 중이면 TextEditor 가 포커스를 쥐고 있어 여기 오지 않는다.
+    if (key == juce::KeyPress::spaceKey)
+    {
+        const int st = engine.getTransportState();
+        if (st == AudioEngine::tsRecording || st == AudioEngine::tsPunchPass)
+        {
+            engine.transportStop();     // 녹음/펀치 패스 중 스페이스 = 정지(커밋)
+            updateTransportUI();
+        }
+        else
+            playButton.triggerClick();  // 재생 ↔ 정지 토글 (버튼과 동일 경로)
+        return true;
+    }
+
+    if (key.getKeyCode() == 'R' || key.getKeyCode() == 'r')
+    {
+        if (recordButton.isEnabled())
+            recordButton.triggerClick();   // 녹음 시작 ↔ 정지 토글
+        return true;
+    }
+
+    return false;
 }
 
 void MainComponent::layoutChannelContainer()
@@ -731,6 +675,10 @@ void MainComponent::timerCallback()
 {
     for (int ch = 0; ch < channelRows.size(); ++ch)
         channelRows[ch]->setMeterLevel (engine.getInputPeak (ch));
+
+    // 구간녹음 펀치아웃 도달 → 자동 정지 (30Hz 근사 — 정확한 절단은 커밋에서, §5.12)
+    if (engine.shouldAutoStopRecording())
+        engine.transportStop();
 
     updateTransportUI();
 
@@ -803,44 +751,56 @@ void MainComponent::updateTransportUI()
         engine.syncPlayheadFromPlayer();
     lastTransportState = st;
 
-    const bool rec = (st == AudioEngine::tsRecording);
-    const bool ply = (st == AudioEngine::tsPlaying);
+    const bool pass = (st == AudioEngine::tsPunchPass);
+    const bool rec  = (st == AudioEngine::tsRecording) || pass;
+    const bool ply  = (st == AudioEngine::tsPlaying);
 
     const auto defBtn = juce::LookAndFeel::getDefaultLookAndFeel()
                             .findColour (juce::TextButton::buttonColourId);
     recordButton.setColour (juce::TextButton::buttonColourId, rec ? juce::Colours::darkred    : defBtn);
-    playButton.setColour   (juce::TextButton::buttonColourId, ply ? juce::Colours::darkgreen  : defBtn);
+    playButton.setColour   (juce::TextButton::buttonColourId, (ply || pass) ? juce::Colours::darkgreen : defBtn);
 
-    // 시간 표시 pos / len
-    const double pos = engine.getTimelineSeconds();
+    // 시간 표시 pos / len — 시크 드래그 중에는 엔진이 아니라 커서가 쥔 위치를 보여준다.
+    const double pos = seeking ? timeline.getPositionSeconds() : engine.getTimelineSeconds();
     const double len = engine.getTimelineLengthSeconds();
     timeLabel.setText (fmtTime (pos) + " / " + fmtTime (len), juce::dontSendNotification);
 
-    // 진행바 (드래그 중이 아닐 때만 갱신)
-    if (! seeking)
-    {
-        positionSlider.setRange (0.0, juce::jmax (0.001, len), 0.0);
-        positionSlider.setValue (juce::jlimit (0.0, juce::jmax (0.001, len), pos),
-                                 juce::dontSendNotification);
-    }
-    positionSlider.setEnabled (engine.isTakeLoaded() && ! rec);
-
-    // 반복 구간 스트립 — 길이·구간·활성 상태를 엔진에서 되읽는다(세션 복원 반영).
-    loopStrip.setTotalSeconds (len);
-    loopStrip.setRange (engine.getLoopStartSeconds(), engine.getLoopEndSeconds());
-    loopStrip.setActive (engine.isLoopEnabled() && engine.hasLoopRange());
-    loopStrip.setEnabled (engine.isTakeLoaded() && ! rec);
+    // 타임라인 — 길이/위치/반복 구간을 엔진에서 되읽는다(세션 복원 반영).
+    // 커서는 드래그 중이면 뷰가 알아서 무시한다(사용자가 쥐고 있는 값이 우선).
+    timeline.setLengthSeconds (len);
+    timeline.setPositionSeconds (pos);
+    timeline.setLoopRange (engine.getLoopStartSeconds(), engine.getLoopEndSeconds());
+    // 활성 조건은 "플레이어 로드됨"이 아니라 "테이크에 내용이 있음"(len>0).
+    // 스템은 첫 재생 때 지연 로드되는데, 시크는 로드 전에도 안전하다 —
+    // playheadSeconds 만 잡아두면 재생이 그 위치에서 시작한다.
+    timeline.setEnabled (len > 0.0 && ! rec);
     if (loopButton.getToggleState() != engine.isLoopEnabled())
         loopButton.setToggleState (engine.isLoopEnabled(), juce::dontSendNotification);
     loopButton.setEnabled (! rec);
+    if (punchButton.getToggleState() != engine.isPunchRecordEnabled())
+        punchButton.setToggleState (engine.isPunchRecordEnabled(), juce::dontSendNotification);
+    punchButton.setEnabled (! rec);
 
     playButton.setEnabled (! rec);
-    recordButton.setEnabled (! ply);
+    recordButton.setEnabled (! ply && ! pass);
+    // 패스 중 시크는 캡처와 타임라인의 정렬을 깨므로 잠근다 (타임라인도 위에서 잠김)
+    rewindButton.setEnabled (! rec);
+    toEndButton.setEnabled  (! rec);
 
     undoButton.setEnabled (takeHasUndo && ! rec && ! ply);
 
     // 녹음 상태 라벨
-    if (rec)
+    if (pass)
+    {
+        // 펀치 패스 3단계: 프리롤(대기) → 구간 안(녹음) → 포스트롤(재생 계속)
+        const double in = engine.getPunchInSeconds(), out = engine.getPunchOutSeconds();
+        juce::String txt;
+        if      (pos <  in)  txt = u8 ("펀치 대기 — 구간에서 녹음 시작");
+        else if (pos < out)  txt = u8 ("펀치 녹음 중  드롭: ") + juce::String (engine.getRecordXruns());
+        else                 txt = u8 ("펀치 완료 — 재생 계속, ■ 로 커밋");
+        recordLabel.setText (txt, juce::dontSendNotification);
+    }
+    else if (rec)
         recordLabel.setText (u8 ("녹음 중  드롭: ") + juce::String (engine.getRecordXruns()),
                              juce::dontSendNotification);
     else
@@ -893,16 +853,34 @@ void MainComponent::refreshTakes()
                                   ? u8 ("\xe2\x9f\xb2 녹음 복구")      // ⟲ 직전 상태로
                                   : u8 ("\xe2\x9f\xb3 복구 취소"));    // ⟳ 다시 앞으로
 
-    // 진행바 오버레이 — 현재 테이크의 녹음/펀치 구간 (테이크 변경 시에만 파일 조회)
+    // 클립 레인 — 이력을 날것으로 그리지 않고 덮어쓰기를 적용한 **유효 구간**을 그린다.
+    // (펀치인은 그 지점부터 끝까지 덮어쓰므로 옛 이력 구간은 이미 없는 소리다. DESIGN §5.11)
     {
         const auto info = engine.getCurrentTakeInfo();
         const double sr = info.env.sampleRate > 0.0 ? info.env.sampleRate : 48000.0;
 
-        juce::Array<PunchStripOverlay::Range> ranges;
+        juce::StringArray genLabels;
         for (const auto& h : info.history)
-            ranges.add ({ (double) h.startSample / sr, (double) h.endSample / sr });
+        {
+            const auto t = juce::Time::fromISO8601 (h.at);
+            juce::String lbl = t.toMilliseconds() != 0 ? t.formatted ("%m/%d %H:%M:%S") : juce::String();
 
-        punchOverlay.setRanges (std::move (ranges), info.lengthSeconds());
+            // 부분 채널 커밋은 어느 채널의 소리인지 명기 — union 표시의 거짓말 방지 (§5.12)
+            if (! h.channels.isEmpty() && h.channels.size() < juce::jmax (1, info.env.channels))
+            {
+                juce::StringArray names;
+                for (int c : h.channels)
+                    names.add ("ch" + juce::String (c + 1));
+                lbl << (lbl.isEmpty() ? "" : "  ·  ") << names.joinIntoString (", ")
+                    << juce::String (juce::CharPointer_UTF8 (" 만"));
+            }
+            genLabels.add (lbl);
+        }
+
+        // lengthSamples 클램프: 구버전 테이크(꼬리 절단 시절)의 이력이 현재 길이
+        // 밖을 가리키는 것을 걸러낸다 (TimelineSegments.h 참조).
+        timeline.setSegments (sr::computeEffectiveSegments (info.history, sr, info.lengthSamples),
+                              std::move (genLabels));
     }
 }
 

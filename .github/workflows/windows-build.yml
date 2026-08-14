@@ -1,0 +1,40 @@
+name: Windows Build
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch: {}
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # ASIO SDK 는 Steinberg 라이선스라 CI 에 넣지 않는다 — ASIO_SDK_DIR 미지정이면
+      # CMake 가 JUCE_ASIO 를 끄고 WASAPI 백엔드로 빌드한다 (컴파일 검증 목적).
+      # 실배포 빌드는 로컬에서 -DASIO_SDK_DIR=... 로 한다.
+      - name: Configure
+        run: cmake -B build
+
+      - name: Build beta app (15-day)
+        run: cmake --build build --config Release --target SuperrackBeta --parallel 4
+
+      - name: Build headless tests
+        run: cmake --build build --config Release --target SuperrackTests --parallel 4
+
+      - name: Run headless tests
+        run: build/SuperrackTests_artefacts/Release/SuperrackTests.exe
+
+      - name: Package beta zip
+        run: |
+          $exe = Get-ChildItem -Recurse build/SuperrackBeta_artefacts -Filter *.exe | Select-Object -First 1
+          Write-Host "Packaging: $($exe.FullName)"
+          Compress-Archive -Path $exe.FullName -DestinationPath SuperrackBeta-win.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SuperrackBeta-win
+          path: SuperrackBeta-win.zip
+          retention-days: 15

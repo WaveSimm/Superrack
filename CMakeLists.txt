@@ -55,18 +55,20 @@ if(MSVC)
 endif()
 
 target_compile_definitions(Superrack PRIVATE
-    $<$<PLATFORM_ID:Windows>:JUCE_ASIO=1>   # ASIO 백엔드 (Windows 전용 — 맥은 CoreAudio)
     JUCE_PLUGINHOST_VST3=1       # Phase 1~ 채널 VST3 체인 호스팅
     JUCE_MODAL_LOOPS_PERMITTED=1 # 동기 플러그인 스캔 중 진행창 갱신 (PluginBrowser)
     JUCE_USE_CURL=0
     JUCE_WEB_BROWSER=0
     JUCE_STRICT_REFCOUNTEDPOINTER=1)
 
+# ASIO 백엔드(Windows) 는 SDK 경로가 있을 때만 켠다 — SDK 는 Steinberg 라이선스라
+# 저장소/CI 에 넣을 수 없다. 미지정 빌드(CI 포함)는 WASAPI/DirectSound 백엔드.
 if(ASIO_SDK_DIR)
+    target_compile_definitions(Superrack PRIVATE $<$<PLATFORM_ID:Windows>:JUCE_ASIO=1>)
     target_include_directories(Superrack PRIVATE "${ASIO_SDK_DIR}")
     message(STATUS "Superrack: ASIO SDK 경로 사용 -> ${ASIO_SDK_DIR}")
 else()
-    message(STATUS "Superrack: ASIO_SDK_DIR 미지정 - JUCE 번들 ASIO 헤더로 빌드 시도")
+    message(STATUS "Superrack: ASIO_SDK_DIR 미지정 - ASIO 없이 빌드 (Windows 는 WASAPI)")
 endif()
 
 target_link_libraries(Superrack PRIVATE
@@ -115,7 +117,6 @@ if(MSVC)
 endif()
 
 target_compile_definitions(SuperrackBeta PRIVATE
-    $<$<PLATFORM_ID:Windows>:JUCE_ASIO=1>
     JUCE_PLUGINHOST_VST3=1
     JUCE_MODAL_LOOPS_PERMITTED=1
     JUCE_USE_CURL=0
@@ -125,6 +126,7 @@ target_compile_definitions(SuperrackBeta PRIVATE
     SUPERRACK_BETA_DAYS=15)
 
 if(ASIO_SDK_DIR)
+    target_compile_definitions(SuperrackBeta PRIVATE $<$<PLATFORM_ID:Windows>:JUCE_ASIO=1>)
     target_include_directories(SuperrackBeta PRIVATE "${ASIO_SDK_DIR}")
 endif()
 

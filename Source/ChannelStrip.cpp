@@ -178,18 +178,28 @@ std::shared_ptr<ChannelStrip::Node> ChannelStrip::makeNode (const juce::String& 
                                                             int uid, const juce::String& displayName)
 {
     juce::PluginDescription desc;
-    if (const auto* d = pickByUid (scanPath (path), uid))
+
+    // 카탈로그 우선(분석 P2): 아웃오브프로세스 스캔 결과라 이름·uid 가 정확하고,
+    // 인프로세스 findAllTypesForFile(WaveShell 은 파일당 수 초)을 건너뛴다 — 기동 단축.
+    // 조회 실패는 실패가 아니라 폴백 — 첫 실행(빈 카탈로그)도 기존 경로로 동작.
+    const bool fromCatalog = scanCache.catalogLookup != nullptr
+                                 && scanCache.catalogLookup (path, uid, displayName, desc);
+
+    if (! fromCatalog)
     {
-        desc = *d;
-    }
-    // 경로 유실(다른 머신 세션) 또는 경로는 살았지만 uid 불일치(쉘 버전업으로
-    // 클래스 구성 변경) — uid/파일명으로 재탐색. Design Ref: §4.1
-    else if (! findByFallback (path, uid, desc))
-    {
-        err = u8 ("플러그인을 찾지 못했습니다(경로·재탐색 모두 실패): ")
-              + (displayName.isNotEmpty() ? displayName
-                                          : juce::File (path).getFileName());
-        return nullptr;
+        if (const auto* d = pickByUid (scanPath (path), uid))
+        {
+            desc = *d;
+        }
+        // 경로 유실(다른 머신 세션) 또는 경로는 살았지만 uid 불일치(쉘 버전업으로
+        // 클래스 구성 변경) — uid/파일명으로 재탐색. Design Ref: §4.1
+        else if (! findByFallback (path, uid, desc))
+        {
+            err = u8 ("플러그인을 찾지 못했습니다(경로·재탐색 모두 실패): ")
+                  + (displayName.isNotEmpty() ? displayName
+                                              : juce::File (path).getFileName());
+            return nullptr;
+        }
     }
 
     const double sr = sampleRate > 0.0 ? sampleRate : 48000.0;

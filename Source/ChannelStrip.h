@@ -3,6 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <farbot/RealtimeObject.hpp>
 #include <atomic>
+#include <functional>
 #include <map>
 #include <memory>
 #include <vector>
@@ -18,6 +19,13 @@
 struct PluginScanCache
 {
     std::map<juce::String, std::vector<juce::PluginDescription>> byPath;
+
+    /** 카탈로그(아웃오브프로세스 스캔 결과) 우선 조회 — AudioEngine 이 꽂는다(분석 P2).
+        경로+uid(+이름) 일치 항목을 찾으면 out 을 채우고 true, 아니면 false →
+        기존 파일 스캔(findAllTypesForFile) 경로로 폴백. ChannelStrip 은
+        PluginCatalog 에 직접 의존하지 않는다(§2.3 — 헤드리스 L1 테스트 유지). */
+    std::function<bool (const juce::String& path, int uid, const juce::String& name,
+                        juce::PluginDescription& out)> catalogLookup;
 };
 
 //==============================================================================

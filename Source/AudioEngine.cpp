@@ -1,5 +1,6 @@
 #include "AudioEngine.h"
 #include "AppSettings.h"
+#include "PluginCatalog.h"
 #include "Util.h"
 #include <cmath>
 
@@ -46,6 +47,32 @@ void AudioEngine::initialise()
     deviceManager.addChangeListener (this);    // 설정 변경 시 저장
 
     lastChannelCount = getActiveChannelCount();
+
+    // 세션 복원 카탈로그 우선 조회 주입 (분석 P2, §2.3 계층 유지 — ChannelStrip 은
+    // 이 함수만 본다). 아웃오브프로세스 스캔 결과라 인프로세스 파일 스캔(WaveShell
+    // 수 초)을 건너뛴다. 일치 규칙은 보수적으로: 경로+uid 필수, 이름이 기록돼
+    // 있으면 이름까지 — 다중 클래스 파일에서 엉뚱한 항목을 집지 않기 위함(BACKLOG J).
+    // 못 찾으면 false → 기존 파일 스캔 폴백이라 첫 실행(빈 카탈로그)도 동작.
+    scanCache.catalogLookup = [] (const juce::String& path, int uid,
+                                  const juce::String& name, juce::PluginDescription& out)
+    {
+        if (uid == 0)
+            return false;   // 단서 부족(구세션) — 파일 스캔 경로에 맡긴다
+
+        const juce::File wanted (path);
+        for (const auto& d : PluginCatalog::get().list().getTypes())
+        {
+            if (juce::File (d.fileOrIdentifier) != wanted)
+                continue;
+            if (d.uniqueId != uid && d.deprecatedUid != uid)
+                continue;
+            if (name.isNotEmpty() && d.name != name)
+                continue;
+            out = d;
+            return true;
+        }
+        return false;
+    };
 
     // 자동 저장된 세션(플러그인 체인+게인) 복원. strips 는 위에서 sr/bs 준비됨.
     const auto sessionFile = getSessionFile();

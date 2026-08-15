@@ -35,6 +35,11 @@ jobs:
           APP=$(find build/SuperrackBeta_artefacts -type d -name "*.app" | head -1)
           echo "Packaging: $APP"
           lipo -info "$APP/Contents/MacOS/"*
+          # 링커 서명만으로는 Gatekeeper 가 "no usable signature" 로 거부한다 —
+          # 번들 전체 ad-hoc 재서명으로 유효한 서명을 만든다 (공증은 아님:
+          # 최초 실행은 여전히 시스템 설정 "그래도 열기" 필요).
+          codesign --force --deep -s - "$APP"
+          codesign --verify --deep --strict "$APP"
           mkdir dmg-root
           cp -R "$APP" dmg-root/
           ln -s /Applications dmg-root/Applications

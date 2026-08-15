@@ -12,9 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ASIO SDK 는 Steinberg 라이선스라 CI 에 넣지 않는다 — ASIO_SDK_DIR 미지정이면
-      # CMake 가 JUCE_ASIO 를 끄고 WASAPI 백엔드로 빌드한다 (컴파일 검증 목적).
-      # 실배포 빌드는 로컬에서 -DASIO_SDK_DIR=... 로 한다.
+      # JUCE 8.0.11+ 는 ASIO SDK 헤더를 번들 — 외부 SDK 없이 JUCE_ASIO=1 로 빌드된다.
       - name: Configure
         run: cmake -B build
 

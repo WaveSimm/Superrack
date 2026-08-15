@@ -37,4 +37,4 @@ cmake --build build --config Release --target SuperrackTests
 ```
 
 ## 참고 — ASIO SDK 라이선스
-클로즈드소스 배포 시 Steinberg ASIO SDK 무료 독점 계약 서명 필요(기술검토 §6). 본인 머신 간 사용은 무관.
+JUCE 8.0.11+ 가 ASIO SDK 헤더를 번들하므로 별도 SDK 설치 없이 `JUCE_ASIO=1` 로 빌드된다(CI 포함, 기본 켜짐). 2025-10 SDK 이중 라이선스화로 문제 대부분 소멸(기술검토 §6) — 클로즈드소스 **배포** 시에는 Steinberg 무료 독점 계약 서명이 형식 요건으로 남아 있음. 본인 머신 간 사용은 무관.

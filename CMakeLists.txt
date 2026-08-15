@@ -10,11 +10,11 @@ FetchContent_Declare(
     GIT_SHALLOW    TRUE)
 FetchContent_MakeAvailable(JUCE)
 
-# ── ASIO SDK (옵션) ───────────────────────────────────────────────────────────
-# JUCE_ASIO=1 을 쓰려면 Steinberg ASIO SDK 헤더(common/asio.h)가 인클루드 경로에
-# 있어야 한다. SDK 경로를 주면 자동으로 추가한다.
+# ── ASIO SDK (옵션 — 외부 헤더 교체용) ────────────────────────────────────────
+# JUCE 8.0.11+ 는 ASIO SDK 헤더를 번들하므로 기본은 번들 헤더로 JUCE_ASIO=1.
+# 다른 버전 SDK 를 쓰려면 경로를 지정 (JUCE_ASIO_USE_EXTERNAL_SDK=1 로 전환).
 #   cmake -B build -DASIO_SDK_DIR="C:/SDKs/asiosdk/common"
-set(ASIO_SDK_DIR "" CACHE PATH "Steinberg ASIO SDK 의 common 폴더 (asio.h 위치)")
+set(ASIO_SDK_DIR "" CACHE PATH "Steinberg ASIO SDK 의 common 폴더 (asio.h 위치, 미지정 시 JUCE 번들 헤더)")
 
 # ── GUI 앱 타깃 ───────────────────────────────────────────────────────────────
 # macOS: MICROPHONE_PERMISSION_* 가 Info.plist 의 NSMicrophoneUsageDescription 을
@@ -61,14 +61,15 @@ target_compile_definitions(Superrack PRIVATE
     JUCE_WEB_BROWSER=0
     JUCE_STRICT_REFCOUNTEDPOINTER=1)
 
-# ASIO 백엔드(Windows) 는 SDK 경로가 있을 때만 켠다 — SDK 는 Steinberg 라이선스라
-# 저장소/CI 에 넣을 수 없다. 미지정 빌드(CI 포함)는 WASAPI/DirectSound 백엔드.
+# ASIO 백엔드(Windows) — JUCE 8.0.11+ 는 ASIO SDK 헤더를 번들하므로 항상 켠다.
+# ASIO_SDK_DIR 지정 시에만 번들 대신 외부 SDK 헤더를 쓴다 (JUCE_ASIO_USE_EXTERNAL_SDK).
+target_compile_definitions(Superrack PRIVATE $<$<PLATFORM_ID:Windows>:JUCE_ASIO=1>)
 if(ASIO_SDK_DIR)
-    target_compile_definitions(Superrack PRIVATE $<$<PLATFORM_ID:Windows>:JUCE_ASIO=1>)
+    target_compile_definitions(Superrack PRIVATE $<$<PLATFORM_ID:Windows>:JUCE_ASIO_USE_EXTERNAL_SDK=1>)
     target_include_directories(Superrack PRIVATE "${ASIO_SDK_DIR}")
-    message(STATUS "Superrack: ASIO SDK 경로 사용 -> ${ASIO_SDK_DIR}")
+    message(STATUS "Superrack: 외부 ASIO SDK 헤더 사용 -> ${ASIO_SDK_DIR}")
 else()
-    message(STATUS "Superrack: ASIO_SDK_DIR 미지정 - ASIO 없이 빌드 (Windows 는 WASAPI)")
+    message(STATUS "Superrack: JUCE 번들 ASIO 헤더 사용")
 endif()
 
 target_link_libraries(Superrack PRIVATE
@@ -125,8 +126,9 @@ target_compile_definitions(SuperrackBeta PRIVATE
     SUPERRACK_BETA=1
     SUPERRACK_BETA_DAYS=15)
 
+target_compile_definitions(SuperrackBeta PRIVATE $<$<PLATFORM_ID:Windows>:JUCE_ASIO=1>)
 if(ASIO_SDK_DIR)
-    target_compile_definitions(SuperrackBeta PRIVATE $<$<PLATFORM_ID:Windows>:JUCE_ASIO=1>)
+    target_compile_definitions(SuperrackBeta PRIVATE $<$<PLATFORM_ID:Windows>:JUCE_ASIO_USE_EXTERNAL_SDK=1>)
     target_include_directories(SuperrackBeta PRIVATE "${ASIO_SDK_DIR}")
 endif()
 

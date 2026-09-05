@@ -1,5 +1,8 @@
 # 빌드 산출물
 /build/
+/build-universal/
+/dist/
+*.dmg
 *.exe
 *.obj
 *.pdb

@@ -1,5 +1,6 @@
 #include "MainComponent.h"
 #include "AppSettings.h"
+#include "PluginFormats.h"
 #include "UiLookAndFeel.h"
 #include "Util.h"
 
@@ -7,7 +8,7 @@ using sr::u8;
 using sr::boldButtonLnf;
 
 //==============================================================================
-// AppSettingsPanel — 저장 위치 / VST3 추가 경로 / 병렬 워커 수 (범용화 설정)
+// AppSettingsPanel — 저장 위치 / 플러그인 검색 경로 / 병렬 워커 수 (범용화 설정)
 //==============================================================================
 class AppSettingsPanel : public juce::Component
 {
@@ -59,16 +60,19 @@ public:
         storageHint.setFont (juce::FontOptions (11.0f));
         storageHint.setColour (juce::Label::textColourId, juce::Colours::grey);
 
-        // ── VST3 검색 경로 ──
+        // ── 플러그인 검색 경로 ──
+       #if JUCE_MAC
+        initLabel (vst3Title, u8 ("플러그인 검색 경로 — 회색 = 기본(항상 검색, 편집 불가), "
+                                  "아래에 VST3 경로 추가 (한 줄에 하나)"));
+       #else
         initLabel (vst3Title, u8 ("VST3 검색 경로 — 회색 = 기본(항상 검색, 편집 불가), 아래에 추가 (한 줄에 하나)"));
+       #endif
 
         // 기본 검색 위치: 입력 박스 상단에 회색 고정 줄로 표시 (읽기전용).
+        // AU 는 경로 검색이 아니라 시스템 등록(AudioComponent) 기준이라 추가 경로가 없다 —
+        // defaultLocationLines() 가 그 사실을 문구로 함께 보여준다.
         {
-            juce::VST3PluginFormat fmt;
-            const auto defaults = fmt.getDefaultLocationsToSearch();
-            juce::StringArray lines;
-            for (int i = 0; i < defaults.getNumPaths(); ++i)
-                lines.add (defaults[i].getFullPathName());
+            const auto lines = sr::plugins::defaultLocationLines();
             numDefaultLines = juce::jmax (1, lines.size());
 
             vst3Defaults.setMultiLine (true);

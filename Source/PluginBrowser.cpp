@@ -1,5 +1,6 @@
 #include "PluginBrowser.h"
 #include "PluginCatalog.h"
+#include "PluginFormats.h"
 #include "Util.h"
 
 #include <algorithm>
@@ -24,9 +25,18 @@ public:
         if (isSelected())
             g.fillAll (juce::Colours::white.withAlpha (0.12f));
 
+        // 같은 플러그인이 VST3·AU 로 둘 다 설치된 경우가 흔하다 — 포맷을 함께 보여
+        // 어느 쪽을 넣는지 알 수 있게 한다 (AudioUnit → "AU").
+        const auto tag = desc.pluginFormatName == "AudioUnit" ? juce::String ("AU")
+                                                              : desc.pluginFormatName;
+        constexpr int tagW = 40;   // "VST3"/"AU" 고정 폭 — 이름 열이 흔들리지 않게
+        g.setFont (juce::Font (juce::FontOptions (11.0f)));
+        g.setColour (juce::Colours::white.withAlpha (0.45f));
+        g.drawText (tag, w - tagW - 6, 0, tagW, h, juce::Justification::centredRight);
+
         g.setColour (juce::Colours::white);
         g.setFont (juce::Font (juce::FontOptions (13.0f)));
-        g.drawText (desc.name, 6, 0, w - 10, h, juce::Justification::centredLeft);
+        g.drawText (desc.name, 6, 0, w - 16 - tagW, h, juce::Justification::centredLeft);
     }
 
     void itemSelectionChanged (bool nowSelected) override
@@ -83,11 +93,20 @@ PluginBrowser::PluginBrowser (PickFn onPickFn) : onPick (std::move (onPickFn))
     addAndMakeVisible (tree);
 
     rescanButton.setButtonText (u8 ("재스캔"));
+   #if JUCE_MAC
+    rescanButton.setTooltip (u8 ("표준 VST3 위치 + 설정의 추가 경로, 그리고 시스템에 등록된 "
+                                 "AudioUnit(AUv2)을 스캔합니다"));
+   #else
     rescanButton.setTooltip (u8 ("표준 VST3 위치 + 설정의 추가 경로를 스캔합니다"));
+   #endif
     rescanButton.onClick = [this] { rescan(); };
 
     fileButton.setButtonText (u8 ("파일에서 추가"));
+   #if JUCE_MAC
+    fileButton.setTooltip (u8 ("스캔 경로 밖의 .vst3 / .component 파일을 직접 선택합니다"));
+   #else
     fileButton.setTooltip (u8 ("스캔 경로 밖의 .vst3 파일을 직접 선택합니다"));
+   #endif
     fileButton.onClick = [this] { addFromFile(); };
 
     addButton.setButtonText (u8 ("추가"));
@@ -196,7 +215,7 @@ void PluginBrowser::rescan()
     setEnabled (false);   // 펌핑 중 재진입(재스캔 재클릭 등) 차단
 
     double progress = 0.0;
-    juce::AlertWindow win (u8 ("플러그인 스캔"), u8 ("VST3 검색 중…"),
+    juce::AlertWindow win (u8 ("플러그인 스캔"), u8 ("플러그인 검색 중…"),
                            juce::MessageBoxIconType::NoIcon);
     win.addProgressBarComponent (progress);
     win.setVisible (true);
@@ -205,7 +224,7 @@ void PluginBrowser::rescan()
     PluginCatalog::get().scanSync ([&] (float p, const juce::String& file) -> bool
     {
         progress = (double) p;
-        win.setMessage (juce::File (file).getFileName());
+        win.setMessage (sr::plugins::shortName (file));
        #if JUCE_MODAL_LOOPS_PERMITTED
         juce::MessageManager::getInstance()->runDispatchLoopUntil (10);
        #endif
@@ -223,14 +242,17 @@ void PluginBrowser::addFromFile()
 {
    #if JUCE_MAC
     juce::File initialDir ("/Library/Audio/Plug-Ins/VST3");
+    const juce::String filter ("*.vst3;*.component");
+    const auto title = u8 ("플러그인 선택 (VST3 / AU)");
    #else
     juce::File initialDir ("C:/Program Files/Common Files/VST3");
+    const juce::String filter ("*.vst3");
+    const auto title = u8 ("VST3 플러그인 선택");
    #endif
     if (! initialDir.isDirectory())
         initialDir = juce::File::getSpecialLocation (juce::File::userHomeDirectory);
 
-    chooser = std::make_unique<juce::FileChooser> (u8 ("VST3 플러그인 선택"),
-                                                   initialDir, "*.vst3");
+    chooser = std::make_unique<juce::FileChooser> (title, initialDir, filter);
     const auto chooserFlags = juce::FileBrowserComponent::openMode
                             | juce::FileBrowserComponent::canSelectFiles;
 
@@ -247,7 +269,7 @@ void PluginBrowser::addFromFile()
         {
             juce::NativeMessageBox::showMessageBoxAsync (
                 juce::MessageBoxIconType::WarningIcon, u8 ("플러그인 로드 실패"),
-                u8 ("VST3 플러그인을 찾지 못했습니다: ") + file.getFileName());
+                u8 ("플러그인을 찾지 못했습니다: ") + file.getFileName());
             return;
         }
 

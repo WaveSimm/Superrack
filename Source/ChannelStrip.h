@@ -9,9 +9,10 @@
 #include <vector>
 
 //==============================================================================
-/** VST3 스캔 결과 캐시 (설계 R3): .vst3 경로 → 그 파일의 "모든" 클래스 목록.
+/** 플러그인 스캔 결과 캐시 (설계 R3): 식별자(VST3 파일 경로 / AU "AudioUnit:...")
+    → 그 대상의 "모든" 클래스 목록.
 
-    findAllTypesForFile 은 파일 스캔이라 느리다 — 같은 플러그인을 여러 채널에
+    findAllTypesForFile 은 파일 스캔·인스턴스화라 느리다 — 같은 플러그인을 여러 채널에
     로드할 때(세션 복원·프로파일 체인 복제) 경로당 1회만 스캔한다.
     WaveShell 등 1파일 다중 클래스 모듈을 위해 목록 전체를 보존한다 — 빈 결과도
     캐시해 반복 실패 스캔을 막는다 (waves-shell-support §3.1).
@@ -29,7 +30,7 @@ struct PluginScanCache
 };
 
 //==============================================================================
-/** 한 입력 채널에 적용되는 VST3 직렬 체인 (Phase 1 · D2 재설계).
+/** 한 입력 채널에 적용되는 플러그인 직렬 체인 (VST3 / macOS AU · Phase 1 · D2 재설계).
 
     - 채널을 스테레오(2ch) 내부 버퍼로 처리: 모노 입력을 L/R 로 복제 → 체인 처리
       → 좌채널을 모노 출력(ASIO Out[ch])으로 보냄. (대부분의 모노/스테레오 FX 호환)
@@ -72,9 +73,10 @@ public:
 
     //==========================================================================
     // ── 메시지 스레드 (GUI) ────────────────────────────────────────────────
-    /** .vst3 파일을 로드해 체인 끝에 추가. 실패 시 errorMessage 채우고 false.
-        다중 클래스 파일이면 첫 클래스가 로드된다 — 특정 서브플러그인은 desc 오버로드로. */
-    bool addPlugin (const juce::File& vst3File, juce::String& errorMessage);
+    /** 플러그인 파일(.vst3 / .component)을 로드해 체인 끝에 추가. 실패 시
+        errorMessage 채우고 false. 다중 클래스 파일이면 첫 클래스가 로드된다 —
+        특정 서브플러그인은 desc 오버로드로. */
+    bool addPlugin (const juce::File& pluginFile, juce::String& errorMessage);
 
     /** 브라우저/팝업에서 확정된 desc 로 직접 추가 — uid 를 명시해 다중 클래스
         파일(WaveShell)에서 정확한 서브플러그인을 로드한다 (waves-shell-support §4.1). */
@@ -85,8 +87,8 @@ public:
     static const juce::PluginDescription* pickByUid (const std::vector<juce::PluginDescription>& types,
                                                      int uid) noexcept;
 
-    /** 경로의 모든 클래스를 스캔해 캐시 경유로 반환 — 실패/빈 파일이면 빈 목록
-        (역시 캐시됨). 메시지 스레드 전용. */
+    /** 식별자(파일 경로/AU)의 모든 클래스를 스캔해 캐시 경유로 반환 — 실패/빈
+        대상이면 빈 목록(역시 캐시됨). 메시지 스레드 전용. */
     const std::vector<juce::PluginDescription>& scanPath (const juce::String& path);
     void removePlugin (int index);
     void setBypass (int index, bool shouldBypass);
@@ -111,8 +113,9 @@ private:
     {
         std::unique_ptr<juce::AudioPluginInstance> plugin;
         std::atomic<bool> bypassed { false };
-        juce::String filePath;        // 세션 복원용 .vst3 경로 (폴백 성공 시 로컬 경로로 갱신됨)
-        int          uid = 0;         // VST3 class UID (PluginDescription::uniqueId) — 머신 독립 식별자
+        juce::String filePath;        // 세션 복원용 식별자: .vst3 경로 또는 AU "AudioUnit:..."
+                                      // (폴백 성공 시 이 머신에서 유효한 값으로 갱신됨)
+        int          uid = 0;         // PluginDescription::uniqueId — VST3 class UID / AU FourCC XOR
     };
 
     /** shared_ptr 벡터 = 복사 가능(farbot 요구) + 노드 파괴는 마지막 참조 소유
@@ -127,9 +130,14 @@ private:
                                     const juce::String& base64State, juce::String& err,
                                     int uid = 0, const juce::String& displayName = {});
 
-    /** 경로 실패 시 폴백: ① 표준 VST3 위치에서 같은 파일명 검색(+uid 검증)
-        ② uid 로 전체 스캔. 성공 시 out 채우고 true. 메시지 스레드 전용. */
+    /** 식별자 실패 시 폴백. VST3(파일): ① 표준 위치에서 같은 파일명 검색(+uid 검증)
+        ② uid 로 전체 스캔. AU(식별자): uid 가 같은 AudioComponent 검색.
+        성공 시 out 채우고 true. 메시지 스레드 전용. */
     bool findByFallback (const juce::String& originalPath, int uid, juce::PluginDescription& out);
+
+    /** 등록된 AudioComponent 중 uid 가 같은 것 — 식별자 문자열만으로 uid 를 계산해
+        후보를 좁히므로 플러그인을 전부 로드하지 않는다. 메시지 스레드 전용. */
+    bool findAudioUnitByUid (int uid, juce::PluginDescription& out);
     void prepareNode (Node& node);
 
     /** editList 를 RT 뷰로 복사 스왑(메시지 스레드). 구버전은 여기서 해제. */

@@ -1,5 +1,6 @@
 #include "ChannelStrip.h"
 #include "AppSettings.h"
+#include "PluginFormats.h"
 #include "Util.h"
 
 using sr::u8;
@@ -93,15 +94,14 @@ void ChannelStrip::setOutGainDb (float db) noexcept
 //==============================================================================
 const std::vector<juce::PluginDescription>& ChannelStrip::scanPath (const juce::String& path)
 {
-    // R3: 경로당 1회만 파일 스캔 — 여러 채널에 같은 플러그인 로드 시(세션 복원·
+    // R3: 식별자당 1회만 스캔 — 여러 채널에 같은 플러그인 로드 시(세션 복원·
     // 프로파일 체인 복제) 반복 스캔을 제거한다. 빈 결과도 캐시(반복 실패 방지).
     // Design Ref: §3.1 — WaveShell 등 다중 클래스 파일은 목록 전체를 보존한다.
     if (const auto it = scanCache.byPath.find (path); it != scanCache.byPath.end())
         return it->second;
 
     juce::OwnedArray<juce::PluginDescription> types;
-    juce::VST3PluginFormat fmt;
-    fmt.findAllTypesForFile (types, path);
+    sr::plugins::findAllTypes (formats, types, path);   // VST3 경로 / AU 식별자 자동 판별
 
     auto& cached = scanCache.byPath[path];    // map 노드는 이후 삽입에도 참조 안정
     cached.reserve ((size_t) types.size());
@@ -125,11 +125,45 @@ const juce::PluginDescription* ChannelStrip::pickByUid (const std::vector<juce::
     return nullptr;
 }
 
+bool ChannelStrip::findAudioUnitByUid (int uid, juce::PluginDescription& out)
+{
+    if (uid == 0)
+        return false;
+
+    for (int f = 0; f < formats.getNumFormats(); ++f)
+        for (const auto& id : formats.getFormat (f)->searchPathsForPlugins ({}, false, false))
+        {
+            // 등록된 AudioComponent 열거는 값싸고, uid 는 식별자 문자열에서 계산되므로
+            // 후보를 고를 때까지 플러그인을 하나도 로드하지 않는다 (AU 전체 인스턴스화 방지).
+            if (sr::plugins::audioUnitUid (id) != uid)
+                continue;
+
+            if (const auto* d = pickByUid (scanPath (id), uid))
+            {
+                out = *d;
+                return true;
+            }
+        }
+
+    return false;
+}
+
 bool ChannelStrip::findByFallback (const juce::String& originalPath, int uid,
                                    juce::PluginDescription& out)
 {
-    juce::VST3PluginFormat fmt;
-    auto locations = fmt.getDefaultLocationsToSearch();
+    // AU: 식별자가 곧 정체성(머신 독립)이라 경로 재탐색이 무의미하다. 식별자가 죽었다면
+    // (미설치·컴포넌트 코드 변경) 같은 uid 의 AudioComponent 를 찾는다.
+    if (sr::plugins::isIdentifier (originalPath))
+        return findAudioUnitByUid (uid != 0 ? uid : sr::plugins::audioUnitUid (originalPath), out);
+
+    // ── 이하 파일 기반 포맷(VST3) ──────────────────────────────────────────
+    juce::FileSearchPath locations;
+    for (int f = 0; f < formats.getNumFormats(); ++f)
+    {
+        const auto def = formats.getFormat (f)->getDefaultLocationsToSearch();
+        for (int i = 0; i < def.getNumPaths(); ++i)
+            locations.addIfNotAlreadyThere (def[i]);
+    }
 
     // 사용자 지정 VST3 추가 경로 (앱 설정) — 표준 위치보다 먼저 검색.
     const auto extras = AppSettings::get().vst3ExtraPaths();
@@ -140,7 +174,7 @@ bool ChannelStrip::findByFallback (const juce::String& originalPath, int uid,
     // ① 빠른 경로: 표준 위치에서 같은 파일명(.vst3 는 파일 또는 번들 폴더).
     //    다른 드라이브/폴더에 설치된 흔한 케이스를 전체 스캔 없이 해결.
     //    다중 클래스 파일도 pickByUid 로 해당 서브플러그인을 찾는다 (uid==0 → 첫 항목).
-    if (const auto fileName = juce::File (originalPath).getFileName(); fileName.isNotEmpty())
+    if (const auto fileName = sr::plugins::shortName (originalPath); fileName.isNotEmpty())
     {
         for (int i = 0; i < locations.getNumPaths(); ++i)
         {
@@ -160,13 +194,20 @@ bool ChannelStrip::findByFallback (const juce::String& originalPath, int uid,
 
     // ② uid 전체 스캔: 파일명까지 바뀐 경우(Waves 쉘 버전업 V15→V16 등). 표준 위치의
     //    모든 VST3 를 스캔하므로 느릴 수 있으나(1회성 폴백, scanCache 로 중복 제거)
-    //    세션 유실보다 낫다.
+    //    세션 유실보다 낫다. 식별자 포맷(AU)은 여기서 건너뛴다 — 파일에서 온 uid 는
+    //    AU uid 체계와 다르므로 맞을 수 없고, 전부 로드하는 비용만 든다.
     if (uid != 0)
-        for (const auto& id : fmt.searchPathsForPlugins (locations, true, false))
-            if (const auto* d = pickByUid (scanPath (id), uid))
+        for (int f = 0; f < formats.getNumFormats(); ++f)
+            for (const auto& id : formats.getFormat (f)->searchPathsForPlugins (locations, true, false))
             {
-                out = *d;
-                return true;
+                if (sr::plugins::isIdentifier (id))
+                    continue;
+
+                if (const auto* d = pickByUid (scanPath (id), uid))
+                {
+                    out = *d;
+                    return true;
+                }
             }
 
     return false;
@@ -197,7 +238,7 @@ std::shared_ptr<ChannelStrip::Node> ChannelStrip::makeNode (const juce::String& 
         {
             err = u8 ("플러그인을 찾지 못했습니다(경로·재탐색 모두 실패): ")
                   + (displayName.isNotEmpty() ? displayName
-                                              : juce::File (path).getFileName());
+                                              : sr::plugins::shortName (path));
             return nullptr;
         }
     }
@@ -242,9 +283,9 @@ std::shared_ptr<ChannelStrip::Node> ChannelStrip::makeNode (const juce::String& 
     return node;
 }
 
-bool ChannelStrip::addPlugin (const juce::File& vst3File, juce::String& errorMessage)
+bool ChannelStrip::addPlugin (const juce::File& pluginFile, juce::String& errorMessage)
 {
-    auto node = makeNode (vst3File.getFullPathName(), false, {}, errorMessage);
+    auto node = makeNode (pluginFile.getFullPathName(), false, {}, errorMessage);
     if (node == nullptr)
         return false;
 

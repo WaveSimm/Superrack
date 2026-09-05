@@ -1,4 +1,4 @@
-# DESIGN — ASIO 다채널 VST3 인서트 프로세서 (Superrack)
+# DESIGN — ASIO 다채널 VST3/AU 인서트 프로세서 (Superrack)
 
 > PDCA: Design · 개정일: 2026-07-03 (갭 분석 G1~G7 문서 동기화) · Plan: [`../01-plan/PLAN.md`](../01-plan/PLAN.md)
 > 전체 원문(다이어그램·클래스 참조 포함): [`../../asio-vst3-host-design.md`](../../asio-vst3-host-design.md)
@@ -18,9 +18,10 @@
 - `AudioDeviceManager` + `AudioIODeviceCallback`
 - 콜백: 채널 루프(Dry push + 스트립 처리 + 1:1 출력), 장치 열기/닫기, SR·버퍼 협상, 채널 활성화(2→32), 드롭아웃 처리
 
-### 3.2 ChannelStrip ×N (채널별 VST3 체인)
-- 입력 채널당 1개, 내부 VST3 직렬 체인(+출력 게인 옵션)
-- `AudioPluginFormatManager`+`VST3PluginFormat` 스캔(`KnownPluginList` 캐시)·로드, `prepareToPlay(sr,maxBlock)` 선행
+### 3.2 ChannelStrip ×N (채널별 플러그인 체인)
+- 입력 채널당 1개, 내부 플러그인 직렬 체인(+출력 게인 옵션)
+- `AudioPluginFormatManager` 스캔(`KnownPluginList` 캐시)·로드, `prepareToPlay(sr,maxBlock)` 선행
+- **호스팅 포맷 (2026-09-05)**: Windows = VST3, macOS = VST3 + **AudioUnit(AUv2)**. 포맷 판별·식별자 비교는 `Source/PluginFormats.*` 한 곳으로 모은다 — VST3 는 *파일 경로*, AU 는 *식별자*(`AudioUnit:Effects/aufx,subt,manu`)로 플러그인을 가리키므로 "경로 가정"을 코드에서 지워야 한다. AUv3(앱 확장)은 비동기 인스턴스화가 필요해 동기 로드 경로와 맞지 않아 스캔에서 제외(`allowAsync=false`).
 - 플러그인 추가/제거/순서변경, 플러그인별 Bypass, 상태(`get/setStateInformation`·`.vstpreset`), 네이티브 에디터 창
 
 ### 3.3 출력 라우팅
@@ -130,11 +131,12 @@
 
 ## 5.3 설정 영속화
 - `AudioDeviceManager` 상태를 `%APPDATA%/Superrack/audio-settings.xml` 에 저장/복원. 시작 시 `initialise(2,2, savedState, true)` 로 복원, `ChangeListener` 로 설정 변경마다 + 종료 시 저장. → ASIO 장치/SR/버퍼/채널이 다음 실행에 유지됨.
-- **세션 머신 이동성 (2026-07-03)**: 플러그인 항목을 `{path, uid, name, bypass, state}` 로 저장 (uid = VST3 class UID, `PluginDescription::uniqueId`). 로드 시 경로 실패 → 폴백: ① 표준 VST3 위치에서 같은 파일명 검색(+uid 검증) ② uid 로 전체 스캔(scanCache 로 중복 제거). 성공 시 노드의 filePath 를 로컬 경로로 **자기치유** — 다음 저장부터 이 머신 경로가 기록됨. uid 없는 구버전 세션은 파일명 폴백만 적용(하위 호환). base64 state 는 플러그인 내부 포맷이라 머신 무관.
+- **세션 머신 이동성 (2026-07-03)**: 플러그인 항목을 `{path, uid, name, bypass, state}` 로 저장 (uid = `PluginDescription::uniqueId`). 로드 시 경로 실패 → 폴백: ① 표준 VST3 위치에서 같은 파일명 검색(+uid 검증) ② uid 로 전체 스캔(scanCache 로 중복 제거). 성공 시 노드의 filePath 를 로컬 경로로 **자기치유** — 다음 저장부터 이 머신 경로가 기록됨. uid 없는 구버전 세션은 파일명 폴백만 적용(하위 호환). base64 state 는 플러그인 내부 포맷이라 머신 무관.
+- **AU 세션 복원 (2026-09-05)**: `path` 자리에 AU 식별자가 들어간다 — 파일 경로가 아니므로 `juce::File` 로 감싸면 안 된다(`sr::plugins::sameTarget` 이 식별자/경로를 구분). AU 는 식별자·uid 모두 머신 독립(uid = componentType^SubType^Manufacturer)이라 경로 재탐색이 필요 없고, 식별자가 죽었을 때만 같은 uid 의 AudioComponent 를 찾는다. 이때 uid 를 **식별자 문자열에서 계산**하므로(`sr::plugins::audioUnitUid`) 후보를 고를 때까지 AU 를 하나도 로드하지 않는다 — VST3 의 ② 전체 스캔과 달리 비용이 사실상 0.
 
 ## 5.10 앱 설정 (H — 범용화, 2026-07-03)
 - `AppSettings` 싱글턴 (`Source/AppSettings.*`), `%APPDATA%/Superrack/app-settings.json`, 세터 즉시 저장. 모든 접근 메시지 스레드.
-- 항목: ① **storageRoot** — takes/.rectmp/profiles 루트 (기본 `<Documents>/Superrack`; OneDrive 문서 리다이렉트 회피용, 변경 시 새 테이크부터 적용) ② **vst3ExtraPaths** — 세션 폴백 재탐색(§5.3)에서 표준 위치보다 우선 검색 ③ **workerCount** — 0=자동(물리코어−3, §5.8), 1~6 수동, 재시작 적용.
+- 항목: ① **storageRoot** — takes/.rectmp/profiles 루트 (기본 `<Documents>/Superrack`; OneDrive 문서 리다이렉트 회피용, 변경 시 새 테이크부터 적용) ② **vst3ExtraPaths** — 세션 폴백 재탐색(§5.3)·카탈로그 스캔에서 표준 위치보다 우선 검색 (AU 는 시스템 등록 기준이라 경로 추가 개념이 없다 — 설정 창은 표준 Components 위치를 안내 문구로만 표시) ③ **workerCount** — 0=자동(물리코어−3, §5.8), 1~6 수동, 재시작 적용.
 - 우선순위: 환경변수(진단: `SUPERRACK_WORKERS`/`SUPERRACK_MMCSS`/`SUPERRACK_APPDATA`) > 앱 설정 > 자동. `SUPERRACK_APPDATA` 는 설정 폴더 오버라이드(테스트 격리·포터블).
 - GUI: ⚙ 설정 창 하단 패널 — 저장 위치(변경/기본값), VST3 경로(기본 위치 회색 고정 표시 + 사용자 멀티라인), 워커 수 콤보.
 
@@ -224,5 +226,5 @@ unarmed 채널 = 파일 불가침
 **영속화.** M/S/R = 세션 strips[] 항목의 `mute`/`solo`/`arm`, ⏺ = 세션 `loop.punchRecord` (믹서 상태의 일부 — 테이크에 넣으면 전환마다 리셋돼 어색).
 
 ## 6. 빌드 구성
-`juce_add_gui_app`, 컴파일 정의 `JUCE_ASIO=1` / `JUCE_PLUGINHOST_VST3=1` / `JUCE_USE_CURL=0` / `JUCE_WEB_BROWSER=0`. 링크: `juce_audio_devices/processors/formats/utils`, `gui_basics/gui_extra`, recommended config·warning flags. JUCE는 CMake `FetchContent`로 **8.0.14** 태그 고정(2026-07-03 업그레이드, VST3 SDK 3.8.0).
+`juce_add_gui_app`, 컴파일 정의 `JUCE_ASIO=1`(Windows) / `JUCE_PLUGINHOST_VST3=1` / `JUCE_PLUGINHOST_AU=1`(macOS, `superrack_enable_au()`) / `JUCE_USE_CURL=0` / `JUCE_WEB_BROWSER=0`. macOS 는 AU 에디터 폴백(`AUGenericView`)이 CoreAudioKit 에 있는데 JUCE 모듈이 이 프레임워크를 선언하지 않아 CMake 에서 직접 링크한다. 링크: `juce_audio_devices/processors/formats/utils`, `gui_basics/gui_extra`, recommended config·warning flags. JUCE는 CMake `FetchContent`로 **8.0.14** 태그 고정(2026-07-03 업그레이드, VST3 SDK 3.8.0).
 - **테스트 타깃** `SuperrackTests` (`juce_add_console_app`, `Tests/TestMain.cpp`): 핵심 경로 L1 회귀(녹음 FIFO/커밋·펀치·undo/재생 스트리밍·리샘플/병렬==직렬/설정) — ASIO·플러그인 불필요, 실패 수=종료 코드. → `docs/05-qa/asio-vst3-host.qa-report.md`

@@ -1,6 +1,7 @@
 #include "AudioEngine.h"
 #include "AppSettings.h"
 #include "PluginCatalog.h"
+#include "PluginFormats.h"
 #include "Util.h"
 #include <cmath>
 
@@ -12,7 +13,8 @@ AudioEngine::AudioEngine()
     for (auto& p : inputPeaks)
         p.store (0.0f, std::memory_order_relaxed);
 
-    // JUCE 8.0.11: addDefaultFormats() 는 삭제됨 → 자유 함수 사용. VST3 등록.
+    // JUCE 8.0.11: addDefaultFormats() 는 삭제됨 → 자유 함수 사용.
+    // 등록 포맷: VST3 (+ macOS 는 JUCE_PLUGINHOST_AU=1 이라 AudioUnit 도 함께).
     juce::addDefaultFormatsToManager (formatManager);
 
     // strips 는 maxChannels 개를 미리 생성한다(주소 안정 → 오디오/GUI 리사이즈 경쟁 없음).
@@ -59,10 +61,10 @@ void AudioEngine::initialise()
         if (uid == 0)
             return false;   // 단서 부족(구세션) — 파일 스캔 경로에 맡긴다
 
-        const juce::File wanted (path);
         for (const auto& d : PluginCatalog::get().list().getTypes())
         {
-            if (juce::File (d.fileOrIdentifier) != wanted)
+            // AU 식별자는 경로가 아니다 — juce::File 로 감싸면 안 된다(sameTarget 이 구분).
+            if (! sr::plugins::sameTarget (d.fileOrIdentifier, path))
                 continue;
             if (d.uniqueId != uid && d.deprecatedUid != uid)
                 continue;

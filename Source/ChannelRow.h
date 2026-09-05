@@ -38,7 +38,7 @@ private:
 };
 
 //==============================================================================
-/** 한 채널 = 가로 한 줄(랙 로우): 헤더 + 입력 미터 + 플러그인 체인(가로) + [+VST3].
+/** 한 채널 = 가로 한 줄(랙 로우): 헤더 + 입력 미터 + 플러그인 체인(가로) + [+플러그인].
     세로로 쌓여 Viewport 안에서 스크롤된다. 32채널까지 동일 구조로 확장. */
 class ChannelRow : public juce::Component
 {
@@ -70,7 +70,7 @@ private:
     juce::TextButton muteButton { "M" };  // 재생 스템 뮤트 (라이브 입력 불가침, §5.12)
     juce::TextButton soloButton { "S" };  // 재생 스템 솔로 (가산식)
     juce::TextButton armButton  { "R" };  // 녹음 암 — 다음 녹음이 덮어쓸 채널
-    juce::TextButton addButton { "+ VST3" };
+    juce::TextButton addButton { "+ FX" };   // VST3 / macOS AU — 포맷 무관
     juce::OwnedArray<PluginChip> chips;
 
     float meterLevel = 0.0f;

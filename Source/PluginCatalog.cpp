@@ -1,9 +1,11 @@
 #include "PluginCatalog.h"
 #include "AppSettings.h"
+#include "PluginFormats.h"
 
 //==============================================================================
 PluginCatalog::PluginCatalog()
 {
+    juce::addDefaultFormatsToManager (formats);   // VST3 (+ macOS AudioUnit)
     load();
 }
 
@@ -51,9 +53,12 @@ int PluginCatalog::runScanWorker (const juce::String& pluginPath, const juce::St
 {
     // 워커 프로세스 본체 — 플러그인 로드는 크래시/행 위험이 있으므로 여기(자식
     // 프로세스)에서만 수행한다. 결과는 XML 파일로 부모에게 전달.
-    juce::VST3PluginFormat fmt;
+    // pluginPath 는 VST3 파일 경로일 수도, AU 식별자일 수도 있다 — 포맷은 자동 판별.
+    juce::AudioPluginFormatManager formats;
+    juce::addDefaultFormatsToManager (formats);
+
     juce::OwnedArray<juce::PluginDescription> types;
-    fmt.findAllTypesForFile (types, pluginPath);
+    sr::plugins::findAllTypes (formats, types, pluginPath);
 
     juce::XmlElement root ("SCAN_RESULT");
     for (const auto* t : types)
@@ -69,21 +74,38 @@ void PluginCatalog::scanSync (const std::function<bool (float, const juce::Strin
     // 문제 플러그인이 멈추거나 죽어도 워커 프로세스만 죽는다 — 앱은 다음 파일로
     // 진행. 타임아웃/크래시/무효 파일은 블랙리스트 → 다음 스캔에서 제외
     // (기존 dead-man's-pedal 을 대체하며, UI "응답 없음" 문제를 해결).
-    auto locations = vst3Format.getDefaultLocationsToSearch();
-
-    // 사용자 지정 추가 경로 — ChannelStrip::findByFallback 과 동일 규칙(표준보다 먼저).
-    const auto extras = AppSettings::get().vst3ExtraPaths();
-    for (int i = extras.size(); --i >= 0;)
-        if (juce::File dir (extras[i]); dir.isDirectory())
-            locations.add (dir, 0);
-
     // 전체 재스캔은 블랙리스트도 다시 평가 — 이전 회차의 타임아웃/크래시/환경 문제가
     // 영구 제외로 굳지 않게 한다. 진짜 문제 플러그인은 이번 회차에서 다시 걸러진다.
     knownList.clearBlacklistedFiles();
 
-    const auto files = vst3Format.searchPathsForPlugins (locations, true /*recursive*/,
-                                                         false /*async instantiation 불필요*/);
-    const auto exe   = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
+    // 포맷별 수집: VST3 는 경로 검색(표준 위치 + 사용자 추가 경로), AU 는 시스템에
+    // 등록된 AudioComponent 열거 — AU 는 searchPathsForPlugins 가 경로를 무시하므로
+    // 같은 호출로 처리된다. allowAsync=false 라 AUv3(앱 확장)은 제외된다: 비동기
+    // 인스턴스화가 필요해 이 앱의 동기 로드 경로와 맞지 않는다.
+    const auto extras = AppSettings::get().vst3ExtraPaths();
+
+    juce::StringArray files;
+    std::vector<juce::AudioPluginFormat*> fileFormat;   // files[i] 를 맡을 포맷
+
+    for (int f = 0; f < formats.getNumFormats(); ++f)
+    {
+        auto* fmt = formats.getFormat (f);
+        auto locations = fmt->getDefaultLocationsToSearch();
+
+        // 사용자 지정 추가 경로 — ChannelStrip::findByFallback 과 동일 규칙(표준보다 먼저).
+        for (int i = extras.size(); --i >= 0;)
+            if (juce::File dir (extras[i]); dir.isDirectory())
+                locations.add (dir, 0);
+
+        for (const auto& id : fmt->searchPathsForPlugins (locations, true /*recursive*/,
+                                                          false /*async instantiation 불필요*/))
+        {
+            files.add (id);
+            fileFormat.push_back (fmt);
+        }
+    }
+
+    const auto exe = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
 
     // UAD 등 첫 로드에 하드웨어/인증 확인이 걸리는 플러그인 감안 — 넉넉히.
     constexpr juce::uint32 perFileTimeoutMs = 120'000;
@@ -97,7 +119,7 @@ void PluginCatalog::scanSync (const std::function<bool (float, const juce::Strin
             break;
 
         if (knownList.getBlacklistedFiles().contains (path)
-            || knownList.isListingUpToDate (path, vst3Format))
+            || knownList.isListingUpToDate (path, *fileFormat[(size_t) i]))
             continue;
 
         const auto tmpOut = juce::File::getSpecialLocation (juce::File::tempDirectory)
@@ -160,7 +182,7 @@ void PluginCatalog::scanSync (const std::function<bool (float, const juce::Strin
 std::vector<juce::PluginDescription> PluginCatalog::scanSingleFile (const juce::String& path)
 {
     juce::OwnedArray<juce::PluginDescription> types;
-    vst3Format.findAllTypesForFile (types, path);
+    sr::plugins::findAllTypes (formats, types, path);
 
     std::vector<juce::PluginDescription> out;
     out.reserve ((size_t) types.size());

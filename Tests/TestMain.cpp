@@ -21,6 +21,7 @@
 #include "../Source/ChannelStrip.h"
 #include "../Source/MultitrackRecorder.h"
 #include "../Source/PluginCatalog.h"
+#include "../Source/PluginFormats.h"
 #include "../Source/TakeManager.h"
 #include "../Source/TimelinePlayer.h"
 #include "../Source/TimelineSegments.h"
@@ -743,15 +744,103 @@ static void testPluginSystem (const juce::File& sandbox)
         d.uniqueId = 12345;
         d.fileOrIdentifier = "C:/fake/shell.vst3";
         cat.list().addType (d);
+
+        // AU 항목: 식별자·포맷명이 경로로 뭉개지지 않고 그대로 보존돼야 한다.
+        juce::PluginDescription au;
+        au.name = "AUDynamicsProcessor";
+        au.pluginFormatName = "AudioUnit";
+        au.manufacturerName = "Apple";
+        au.uniqueId = sr::plugins::audioUnitUid ("AudioUnit:Effects/aufx,dcmp,appl");
+        au.fileOrIdentifier = "AudioUnit:Effects/aufx,dcmp,appl";
+        cat.list().addType (au);
+
         cat.list().addToBlacklist ("C:/fake/bad.vst3");
         cat.save();
     }
     {
         PluginCatalog cat2;
-        EXPECT (cat2.list().getNumTypes() == 1);
-        EXPECT (cat2.list().getTypes()[0].uniqueId == 12345);
+        EXPECT (cat2.list().getNumTypes() == 2);
         EXPECT (cat2.list().getBlacklistedFiles().contains ("C:/fake/bad.vst3"));
+
+        // getTypes() 는 값 반환 — 사본을 들고 비교한다(포인터를 남기면 댕글링).
+        const auto types = cat2.list().getTypes();
+        juce::PluginDescription vst3, au;
+        for (const auto& t : types)
+            (t.pluginFormatName == "AudioUnit" ? au : vst3) = t;
+
+        EXPECT (vst3.uniqueId == 12345);
+        EXPECT (au.fileOrIdentifier == "AudioUnit:Effects/aufx,dcmp,appl");
+        EXPECT (au.uniqueId == sr::plugins::audioUnitUid (au.fileOrIdentifier));
     }
+
+    // ── 포맷 추상화: AU 식별자 vs VST3 경로 (순수 문자열 — 플랫폼 무관) ──────
+    {
+        namespace pf = sr::plugins;
+
+        const juce::String auId ("AudioUnit:Effects/aufx,dcmp,appl");
+
+        EXPECT (pf::isIdentifier (auId));
+        EXPECT (pf::isIdentifier ("audiounit:Effects/aufx,dcmp,appl"));   // 대소문자 무시
+        EXPECT (! pf::isIdentifier ("/Library/Audio/Plug-Ins/VST3/A.vst3"));
+        EXPECT (! pf::isIdentifier (""));
+
+        // uid = componentType ^ SubType ^ Manufacturer (JUCE 와 동일). 로드 없이 계산.
+        constexpr int expected = (int) (0x61756678u ^ 0x64636D70u ^ 0x6170706Cu);   // 'aufx'^'dcmp'^'appl'
+        EXPECT (pf::audioUnitUid (auId) == expected);
+        EXPECT (pf::audioUnitUid ("AudioUnit:aufx,dcmp,appl") == expected);   // 카테고리 없는 형태
+        EXPECT (pf::audioUnitUid ("AudioUnit:Effects/aufx,dcmp") == 0);       // 토큰 부족
+        EXPECT (pf::audioUnitUid ("/tmp/x.vst3") == 0);                       // 식별자가 아님
+
+        // sameTarget: 식별자는 문자열, 절대 경로는 File 비교, 그 외는 문자열.
+        EXPECT (pf::sameTarget (auId, auId));
+        EXPECT (pf::sameTarget (auId, auId.toLowerCase()));
+        EXPECT (! pf::sameTarget (auId, "AudioUnit:Effects/aufx,dcmp,ABCD"));
+        EXPECT (! pf::sameTarget (auId, "/tmp/x.vst3"));   // File 로 감싸지 않고 구분
+        EXPECT (! pf::sameTarget (auId, ""));
+        EXPECT (pf::sameTarget ("C:/fake/shell.vst3", "C:/fake/shell.vst3"));   // 타 OS 경로
+
+        const auto abs = sandbox.getChildFile ("a.vst3").getFullPathName();
+        EXPECT (pf::sameTarget (abs, abs));
+        EXPECT (pf::sameTarget (abs, abs + "/"));   // 구분자 정규화 (juce::File 비교)
+        EXPECT (! pf::sameTarget (abs, sandbox.getChildFile ("b.vst3").getFullPathName()));
+
+        // shortName: 에러·진행 표시용 + 폴백 재탐색의 파일명 검색 키.
+        EXPECT (pf::shortName (auId) == "aufx,dcmp,appl");
+        EXPECT (pf::shortName ("AudioUnit:aufx,dcmp,appl") == "aufx,dcmp,appl");
+        EXPECT (pf::shortName (abs) == "a.vst3");
+        // 타 OS 경로도 파일명이 나와야 한다 — 윈도 세션을 맥에서 열면 이 이름으로 재탐색한다.
+        EXPECT (pf::shortName ("C:/fake/shell.vst3") == "shell.vst3");
+        EXPECT (pf::shortName ("D:\\Plugins\\shell.vst3") == "shell.vst3");
+        EXPECT (pf::shortName ("shell.vst3") == "shell.vst3");
+    }
+
+   #if JUCE_MAC
+    // ── AU 열거 ↔ uid 계산 정합 (실기: 시스템에 등록된 AudioComponent) ────────
+    // 스캔은 이 열거 결과를 그대로 워커에 넘기고, 세션 재탐색은 여기서 계산한 uid 로
+    // 후보를 좁힌다 — 둘의 형식이 어긋나면 AU 복원이 조용히 실패한다.
+    {
+        juce::AudioPluginFormatManager fmts;
+        juce::addDefaultFormatsToManager (fmts);
+
+        juce::AudioPluginFormat* au = nullptr;
+        for (int i = 0; i < fmts.getNumFormats(); ++i)
+            if (fmts.getFormat (i)->getName() == "AudioUnit")
+                au = fmts.getFormat (i);
+
+        EXPECT (au != nullptr);   // JUCE_PLUGINHOST_AU 빌드 플래그 확인
+
+        if (au != nullptr)
+        {
+            const auto ids = au->searchPathsForPlugins ({}, false, false);
+            for (const auto& id : ids)
+            {
+                EXPECT (sr::plugins::isIdentifier (id));
+                EXPECT (sr::plugins::audioUnitUid (id) != 0);
+                EXPECT (sr::plugins::formatFor (fmts, id) == au);
+            }
+        }
+    }
+   #endif
 
     // ── 브라우저 검색 필터: 이름/제조사 부분 일치 ────────────────────────────
     juce::PluginDescription w;

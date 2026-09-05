@@ -5,7 +5,7 @@
 //==============================================================================
 namespace sr
 {
-    /** 버튼 라벨을 굵게 렌더하는 LookAndFeel — ASCII 버튼(B/E/X, +VST3)과
+    /** 버튼 라벨을 굵게 렌더하는 LookAndFeel — ASCII 버튼(B/E/X, +FX)과
         트랜스포트 기호(⏮ ● ▶ ■)용. */
     struct BoldButtonLnf : juce::LookAndFeel_V4
     {

@@ -7,6 +7,13 @@ P0~P2 완료(실기), P3 견고화 + 통합 타임라인 녹음/재생 + 테이�
 
 ## 다음 작업
 
+### AU. macOS AudioUnit 호스팅  [P1] — **구현 완료(2026-09-05, L1 통과)** DESIGN §3.2/§5.3
+- 맥에서 VST3 로만 쓸 수 있던 제약 해소: `JUCE_PLUGINHOST_AU=1`(macOS) + CoreAudioKit 링크 → 카탈로그 스캔·브라우저·채널 체인·세션 복원 전 경로에서 AUv2 를 VST3 와 동등하게 다룬다.
+- 핵심 난점은 **식별자 vs 경로**였다. VST3 는 파일 경로지만 AU 는 `AudioUnit:Effects/aufx,subt,manu` 식별자다 — 세션 `path` 필드, 카탈로그 조회(`juce::File` 비교), 폴백 재탐색(파일명 검색)이 전부 경로를 가정하고 있었다. `Source/PluginFormats.*` 로 판별·비교·표시를 모으고 호출부의 경로 가정을 제거했다.
+- AU 폴백은 비용 0: uid = `type^subType^manufacturer` 라 **식별자 문자열만으로 계산**된다(`audioUnitUid`) — VST3 처럼 후보를 전부 로드해 uid 를 확인할 필요가 없다.
+- 제외: **AUv3**(앱 확장) — 비동기 인스턴스화 요구라 동기 로드 경로와 불일치(`searchPathsForPlugins(allowAsync=false)` 로 목록에서 빠진다).
+- L1: 식별자/경로 판별·uid 계산·`sameTarget`·카탈로그 AU 라운드트립 + 실기 AU 열거 ↔ uid 정합(등록 AudioComponent 전수). 잔여: 실제 AU 로딩·에디터 창·세션 복원은 실기 영역.
+
 ### A. P4 — 32채널 확장 + CPU 프로파일링  [P0] — **완료(2026-07-02, 실기 측정)**
 - 프로파일러 구현(DESIGN §5.7) + 실기 측정 완료 → [`measurements/cpu-profile-2026-07-02.md`](measurements/cpu-profile-2026-07-02.md).
 - 결과(96kHz/96smp): 경량 체인(Pro-Q 3) **32ch 안정**, 무거운 체인(Pro-Q 3→Pro-R) **한계 4ch**(부하 채널 선형).

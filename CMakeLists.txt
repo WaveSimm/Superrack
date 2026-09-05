@@ -16,6 +16,18 @@ FetchContent_MakeAvailable(JUCE)
 #   cmake -B build -DASIO_SDK_DIR="C:/SDKs/asiosdk/common"
 set(ASIO_SDK_DIR "" CACHE PATH "Steinberg ASIO SDK 의 common 폴더 (asio.h 위치, 미지정 시 JUCE 번들 헤더)")
 
+# ── AudioUnit 호스팅 (macOS) ─────────────────────────────────────────────────
+# JUCE_PLUGINHOST_AU=1 이면 addDefaultFormatsToManager 가 AudioUnitPluginFormat 을
+# 함께 등록한다(AUv2. AUv3 는 비동기 인스턴스화가 필요해 스캔에서 제외 — 앱의 동기
+# 로드 경로와 맞지 않는다). AUGenericView(에디터 폴백)가 CoreAudioKit 에 있는데
+# juce_audio_processors 모듈은 이 프레임워크를 선언하지 않으므로 여기서 링크한다.
+function(superrack_enable_au target)
+    target_compile_definitions(${target} PRIVATE $<$<PLATFORM_ID:Darwin>:JUCE_PLUGINHOST_AU=1>)
+    if(APPLE)
+        target_link_libraries(${target} PRIVATE "-framework CoreAudioKit")
+    endif()
+endfunction()
+
 # ── GUI 앱 타깃 ───────────────────────────────────────────────────────────────
 # macOS: MICROPHONE_PERMISSION_* 가 Info.plist 의 NSMicrophoneUsageDescription 을
 # 만든다. 이게 없으면 Tahoe(macOS 26) 에서 CoreAudio 입력 장치를 열 때 TCC 가
@@ -34,6 +46,7 @@ target_sources(Superrack PRIVATE
     Source/AudioEngine.cpp
     Source/ChannelStrip.cpp
     Source/PluginCatalog.cpp
+    Source/PluginFormats.cpp
     Source/PluginBrowser.cpp
     Source/MultitrackRecorder.cpp
     Source/TimelinePlayer.cpp
@@ -60,6 +73,8 @@ target_compile_definitions(Superrack PRIVATE
     JUCE_USE_CURL=0
     JUCE_WEB_BROWSER=0
     JUCE_STRICT_REFCOUNTEDPOINTER=1)
+
+superrack_enable_au(Superrack)
 
 # ASIO 백엔드(Windows) — JUCE 8.0.11+ 는 ASIO SDK 헤더를 번들하므로 항상 켠다.
 # ASIO_SDK_DIR 지정 시에만 번들 대신 외부 SDK 헤더를 쓴다 (JUCE_ASIO_USE_EXTERNAL_SDK).
@@ -100,6 +115,7 @@ target_sources(SuperrackBeta PRIVATE
     Source/BetaGate.cpp
     Source/ChannelStrip.cpp
     Source/PluginCatalog.cpp
+    Source/PluginFormats.cpp
     Source/PluginBrowser.cpp
     Source/MultitrackRecorder.cpp
     Source/TimelinePlayer.cpp
@@ -125,6 +141,8 @@ target_compile_definitions(SuperrackBeta PRIVATE
     JUCE_STRICT_REFCOUNTEDPOINTER=1
     SUPERRACK_BETA=1
     SUPERRACK_BETA_DAYS=15)
+
+superrack_enable_au(SuperrackBeta)
 
 target_compile_definitions(SuperrackBeta PRIVATE $<$<PLATFORM_ID:Windows>:JUCE_ASIO=1>)
 if(ASIO_SDK_DIR)
@@ -152,6 +170,7 @@ target_sources(SuperrackTests PRIVATE
     Source/BetaGate.cpp
     Source/ChannelStrip.cpp
     Source/PluginCatalog.cpp
+    Source/PluginFormats.cpp
     Source/MultitrackRecorder.cpp
     Source/TimelinePlayer.cpp
     Source/TakeManager.cpp
@@ -163,6 +182,8 @@ target_include_directories(SuperrackTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/T
 if(MSVC)
     target_compile_options(SuperrackTests PRIVATE /utf-8)
 endif()
+
+superrack_enable_au(SuperrackTests)
 
 target_compile_definitions(SuperrackTests PRIVATE
     JUCE_PLUGINHOST_VST3=1
